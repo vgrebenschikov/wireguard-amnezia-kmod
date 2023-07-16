@@ -73,7 +73,6 @@ __FBSDID("$FreeBSD$");
 
 #include "support.h"
 #include "wg_noise.h"
-#include "wg_cookie.h"
 #include "version.h"
 #include "if_wg.h"
 
@@ -187,14 +186,6 @@ struct wg_packet {
 	}			 p_state;
 };
 
-STAILQ_HEAD(wg_packet_list, wg_packet);
-
-struct wg_queue {
-	struct mtx		 q_mtx;
-	struct wg_packet_list	 q_queue;
-	size_t			 q_len;
-};
-
 struct wg_peer {
 	TAILQ_ENTRY(wg_peer)		 p_entry;
 	uint64_t			 p_id;
@@ -231,44 +222,6 @@ struct wg_peer {
 
 	LIST_HEAD(, wg_aip)		 p_aips;
 	size_t				 p_aips_num;
-};
-
-struct wg_socket {
-	struct socket	*so_so4;
-	struct socket	*so_so6;
-	uint32_t	 so_user_cookie;
-	int		 so_fibnum;
-	in_port_t	 so_port;
-};
-
-struct wg_softc {
-	LIST_ENTRY(wg_softc)	 sc_entry;
-	struct ifnet		*sc_ifp;
-	int			 sc_flags;
-
-	struct ucred		*sc_ucred;
-	struct wg_socket	 sc_socket;
-
-	TAILQ_HEAD(,wg_peer)	 sc_peers;
-	size_t			 sc_peers_num;
-
-	struct noise_local	*sc_local;
-	struct cookie_checker	 sc_cookie;
-
-	struct radix_node_head	*sc_aip4;
-	struct radix_node_head	*sc_aip6;
-
-	struct grouptask	 sc_handshake;
-	struct wg_queue		 sc_handshake_queue;
-
-	struct grouptask	*sc_encrypt;
-	struct grouptask	*sc_decrypt;
-	struct wg_queue		 sc_encrypt_parallel;
-	struct wg_queue		 sc_decrypt_parallel;
-	u_int			 sc_encrypt_last_cpu;
-	u_int			 sc_decrypt_last_cpu;
-
-	struct sx		 sc_lock;
 };
 
 #define	WGF_DYING	0x0001
@@ -2143,28 +2096,6 @@ err_xmit:
 	return (rc);
 }
 
-static inline int
-determine_af_and_pullup(struct mbuf **m, sa_family_t *af)
-{
-	u_char ipv;
-	if ((*m)->m_pkthdr.len >= sizeof(struct ip6_hdr))
-		*m = m_pullup(*m, sizeof(struct ip6_hdr));
-	else if ((*m)->m_pkthdr.len >= sizeof(struct ip))
-		*m = m_pullup(*m, sizeof(struct ip));
-	else
-		return (EAFNOSUPPORT);
-	if (*m == NULL)
-		return (ENOBUFS);
-	ipv = mtod(*m, struct ip *)->ip_v;
-	if (ipv == 4)
-		*af = AF_INET;
-	else if (ipv == 6 && (*m)->m_pkthdr.len >= sizeof(struct ip6_hdr))
-		*af = AF_INET6;
-	else
-		return (EAFNOSUPPORT);
-	return (0);
-}
-
 static int
 wg_transmit(struct ifnet *ifp, struct mbuf *m)
 {
@@ -2187,6 +2118,28 @@ wg_transmit(struct ifnet *ifp, struct mbuf *m)
 		return (ret);
 	}
 	return (wg_xmit(ifp, m, af, ifp->if_mtu));
+}
+
+static inline int
+determine_af_and_pullup(struct mbuf **m, sa_family_t *af)
+{
+	u_char ipv;
+	if ((*m)->m_pkthdr.len >= sizeof(struct ip6_hdr))
+		*m = m_pullup(*m, sizeof(struct ip6_hdr));
+	else if ((*m)->m_pkthdr.len >= sizeof(struct ip))
+		*m = m_pullup(*m, sizeof(struct ip));
+	else
+		return (EAFNOSUPPORT);
+	if (*m == NULL)
+		return (ENOBUFS);
+	ipv = mtod(*m, struct ip *)->ip_v;
+	if (ipv == 4)
+		*af = AF_INET;
+	else if (ipv == 6 && (*m)->m_pkthdr.len >= sizeof(struct ip6_hdr))
+		*af = AF_INET6;
+	else
+		return (EAFNOSUPPORT);
+	return (0);
 }
 
 static int
