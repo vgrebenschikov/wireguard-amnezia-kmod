@@ -6,14 +6,18 @@
 
 #include "opt_inet.h"
 #include "opt_inet6.h"
-#include <sys/types.h>
-#include <sys/systm.h>
+
 #include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/kernel.h>
 #include <sys/lock.h>
+#include <sys/mutex.h>
 #include <sys/rwlock.h>
 #include <sys/socket.h>
+#include <crypto/siphash/siphash.h>
+#include <netinet/in.h>
+#include <vm/uma.h>
 
-#include "support.h"
 #include "wg_cookie.h"
 
 #define COOKIE_MAC1_KEY_LABEL	"mac1----"
@@ -51,6 +55,7 @@ struct ratelimit {
 	struct callout			rl_gc;
 	LIST_HEAD(, ratelimit_entry)	rl_table[RATELIMIT_SIZE];
 	size_t				rl_table_num;
+	bool				rl_initialized;
 };
 
 static void	precompute_key(uint8_t *,
@@ -80,9 +85,8 @@ static uma_zone_t ratelimit_zone;
 int
 cookie_init(void)
 {
-	if ((ratelimit_zone = uma_zcreate("wg ratelimit",
-	    sizeof(struct ratelimit_entry), NULL, NULL, NULL, NULL, 0, 0)) == NULL)
-		return ENOMEM;
+	ratelimit_zone = uma_zcreate("wg ratelimit",
+	    sizeof(struct ratelimit_entry), NULL, NULL, NULL, NULL, 0, 0);
 
 	ratelimit_init(&ratelimit_v4);
 #ifdef INET6
@@ -98,7 +102,8 @@ cookie_deinit(void)
 #ifdef INET6
 	ratelimit_deinit(&ratelimit_v6);
 #endif
-	uma_zdestroy(ratelimit_zone);
+	if (ratelimit_zone != NULL)
+		uma_zdestroy(ratelimit_zone);
 }
 
 void
@@ -346,16 +351,21 @@ ratelimit_init(struct ratelimit *rl)
 	for (i = 0; i < RATELIMIT_SIZE; i++)
 		LIST_INIT(&rl->rl_table[i]);
 	rl->rl_table_num = 0;
+	rl->rl_initialized = true;
 }
 
 static void
 ratelimit_deinit(struct ratelimit *rl)
 {
+	if (!rl->rl_initialized)
+		return;
 	mtx_lock(&rl->rl_mtx);
 	callout_stop(&rl->rl_gc);
 	ratelimit_gc(rl, true);
 	mtx_unlock(&rl->rl_mtx);
 	mtx_destroy(&rl->rl_mtx);
+
+	rl->rl_initialized = false;
 }
 
 static void
