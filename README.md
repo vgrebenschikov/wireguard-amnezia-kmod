@@ -11,10 +11,14 @@ sending junk packets before handshake.
 Snapshots of this may be installed from packages:
 
 ```
-# pkg install wireguard
+# pkg install wireguard-amnezia
 ```
 
 ### Building instructions
+
+git clone https://github.com/vgrebenschikov/wireguard-freebsd.git
+make -C wireguard-freebsd
+sudo make -C wireguard-freebsd install
 
 If you'd prefer to build this repo from scratch, rather than using a package, first make sure you have the latest net/wireguard-tools package
 installed.
