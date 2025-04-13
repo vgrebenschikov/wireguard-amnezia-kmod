@@ -16,17 +16,13 @@ Snapshots of this may be installed from packages:
 
 ### Building instructions
 
-git clone https://github.com/vgrebenschikov/wireguard-freebsd.git
-make -C wireguard-freebsd
-sudo make -C wireguard-freebsd install
-
-If you'd prefer to build this repo from scratch, rather than using a package, first make sure you have the latest net/wireguard-tools package
+If you'd prefer to build this repo from scratch, rather than using a package
 installed.
 
 ```
-# git clone https://git.zx2c4.com/wireguard-freebsd
-# make -C wireguard-freebsd/src
-# make -C wireguard-freebsd/src load install
+git clone https://github.com/vgrebenschikov/wireguard-freebsd.git
+make -C wireguard-freebsd
+sudo make -C wireguard-freebsd install
 ```
 
 After that, it should be possible to use `wg(8)` and `wg-quick(8)` like usual, but with the faster kernel implementation.
