@@ -20,7 +20,7 @@ If you'd prefer to build this repo from scratch, rather than using a package
 installed.
 
 ```
-git clone https://github.com/vgrebenschikov/wireguard-freebsd.git
+git clone https://github.com/vgrebenschikov/wireguard-amnezia.git
 make -C wireguard-freebsd
 sudo make -C wireguard-freebsd install
 ```
