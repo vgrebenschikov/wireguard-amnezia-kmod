@@ -1,5 +1,5 @@
 # Makefile for WireGuard FreeBSD port with AmneziaWG improvements
 
-SUBDIR=	if_wg wg wg-quick
+SUBDIR=	if_wg
 
 .include <bsd.subdir.mk>
