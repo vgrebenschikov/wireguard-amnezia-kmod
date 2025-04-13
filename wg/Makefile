@@ -35,7 +35,7 @@ CWARNFLAGS.config.c+=	-Wno-cast-align
 CWARNFLAGS.ipc.c+=	-Wno-cast-align
 
 BINDIR?=	/usr/local/bin
-MANDIR?=	/usr/local/man
+MANDIR?=	/usr/local/share/man
 
 # Custom install target
 install: all
