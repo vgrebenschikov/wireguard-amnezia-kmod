@@ -1,26 +1,31 @@
-# Amnezia WireGuard for FreeBSD
+# Amnezia WireGuard for FreeBSD kernel driver
 
 This is a kernel module for FreeBSD to support [WireGuard](https://www.wireguard.com/). 
-It is being based on in-tree module implementation of if_wg.
-
-but adding basic support for [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module) -
+It is derived from the in-tree module implementation of if_wg,
+adding basic support for [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module) -
 sending junk packets before handshake.
 
-Onlu partial Implemenation - only Jc, Jmin, Jmax options are supported
+Only partial implementation - only Jc, Jmin, Jmax, S1, S2 options are supported.
 
-### Installation instructions
+## Installation instructions
 
-From port: [net/wireguard-amnezia](https://github.com/vgrebenschikov/wireguard-amnezia-kmod-port)
+From ports:
 
-### Building instructions
+- [net/wireguard-amnezia](https://github.com/vgrebenschikov/wireguard-amnezia-kmod-port)
+- [net/amneziawg-tools](https://github.com/vgrebenschikov/amneziawg-tools)
+
+## Building instructions
 
 If you'd prefer to build this repo from scratch, rather than using a package
 installed.
 
-```
+```shell
 git clone https://github.com/vgrebenschikov/wireguard-amnezia-kmod
 make -C wireguard-amnezia-kmod
 sudo make -C wireguard-amnezia-kmod install
 ```
 
-After that, it should be possible to use `wg(8)` and `wg-quick(8)` like usual, but with the faster kernel implementation. 
+Make sure that the module is loaded from the correct location (/boot/modules/if_wg.ko) and not from the standard kernel modules directory.
+
+After that, it should be possible to use `wg(8)` and `wg-quick(8)` like usual, but with the faster kernel implementation.
+Please use the [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-tools) version of these tools as it supports the additional Amnezia-specific parameters (Jc, Jmin, Jmax, S1, S2).
