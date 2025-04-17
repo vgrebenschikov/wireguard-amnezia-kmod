@@ -70,10 +70,14 @@
 #define DPRINTF(sc, ...) if (if_getflags(sc->sc_ifp) & IFF_DEBUG) if_printf(sc->sc_ifp, ##__VA_ARGS__)
 
 /* First byte indicating packet type on the wire */
-#define WG_PKT_INITIATION htole32(1)
-#define WG_PKT_RESPONSE htole32(2)
-#define WG_PKT_COOKIE htole32(3)
-#define WG_PKT_DATA htole32(4)
+#define WG_PKT_X_DEFAULT(x, y) ((x) ? (x) : (y))
+
+#define WG_PKT_INITIATION(sc)	WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_initiation, htole32(1))
+#define WG_PKT_RESPONSE(sc)	WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_response, htole32(2))
+#define WG_PKT_COOKIE(sc)	WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_cookie, htole32(3))
+#define WG_PKT_DATA(sc)		WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_data, htole32(4))
+
+#define WG_PKT_DEFAULT_MAX	htole32(4)
 
 #define WG_PKT_PADDING		16
 #define WG_KEY_SIZE		32
@@ -216,11 +220,15 @@ struct wg_socket {
 	int		 so_fibnum;
 	in_port_t	 so_port;
 
-	uint32_t	so_junk_packet_count;		/* jc */
-	uint32_t	so_junk_packet_min_size;	/* jmin */
-	uint32_t	so_junk_packet_max_size;	/* jmax */
-	uint32_t	so_init_packet_junk_size;	/* s1 */
-	uint32_t	so_response_packet_junk_size;	/* s2 */
+	uint32_t	 so_junk_packet_count;		// Jc
+	uint32_t	 so_junk_packet_min_size;	// Jmin
+	uint32_t	 so_junk_packet_max_size;	// Jmax
+	uint32_t	 so_init_packet_junk_size;	// S1
+	uint32_t	 so_response_packet_junk_size;	// S2
+	uint32_t	 so_pkt_initiation;		// H1
+	uint32_t	 so_pkt_response;		// H2
+	uint32_t	 so_pkt_cookie;			// H3
+	uint32_t	 so_pkt_data;			// H4
 };
 
 struct wg_softc {
@@ -1270,7 +1278,7 @@ wg_send_initiation(struct wg_peer *peer)
 
 	DPRINTF(sc, "Sending handshake initiation to peer %" PRIu64 "\n", peer->p_id);
 
-	pkt.t = WG_PKT_INITIATION;
+	pkt.t = WG_PKT_INITIATION(sc);
 	cookie_maker_mac(&peer->p_cookie, &pkt.m, &pkt,
 	    sizeof(pkt) - sizeof(pkt.m));
 	wg_peer_send_buf_junk(peer, (uint8_t *)&pkt, sizeof(pkt),
@@ -1290,7 +1298,7 @@ wg_send_response(struct wg_peer *peer)
 	DPRINTF(peer->p_sc, "Sending handshake response to peer %" PRIu64 "\n", peer->p_id);
 
 	wg_timers_event_session_derived(peer);
-	pkt.t = WG_PKT_RESPONSE;
+	pkt.t = WG_PKT_RESPONSE(peer->p_sc);
 	cookie_maker_mac(&peer->p_cookie, &pkt.m, &pkt,
 	     sizeof(pkt)-sizeof(pkt.m));
 	wg_peer_send_buf_junk(peer, (uint8_t*)&pkt, sizeof(pkt),
@@ -1305,7 +1313,7 @@ wg_send_cookie(struct wg_softc *sc, struct cookie_macs *cm, uint32_t idx,
 
 	DPRINTF(sc, "Sending cookie response for denied handshake message\n");
 
-	pkt.t = WG_PKT_COOKIE;
+	pkt.t = WG_PKT_COOKIE(sc);
 	pkt.r_idx = idx;
 
 	cookie_checker_create_payload(&sc->sc_cookie, cm, pkt.nonce,
@@ -1362,8 +1370,8 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 	if ((pkt->p_mbuf = m = m_pullup(m, m->m_pkthdr.len)) == NULL)
 		goto error;
 
-	switch (*mtod(m, uint32_t *)) {
-	case WG_PKT_INITIATION:
+	uint32_t t = *mtod(m, uint32_t *);
+	if ( t == WG_PKT_INITIATION(sc)) {
 		init = mtod(m, struct wg_pkt_initiation *);
 
 		res = cookie_checker_validate_macs(&sc->sc_cookie, &init->m,
@@ -1396,8 +1404,7 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 
 		wg_peer_set_endpoint(peer, e);
 		wg_send_response(peer);
-		break;
-	case WG_PKT_RESPONSE:
+	} else if (t == WG_PKT_RESPONSE(sc)) {
 		resp = mtod(m, struct wg_pkt_response *);
 
 		res = cookie_checker_validate_macs(&sc->sc_cookie, &resp->m,
@@ -1430,8 +1437,7 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 		wg_peer_set_endpoint(peer, e);
 		wg_timers_event_session_derived(peer);
 		wg_timers_event_handshake_complete(peer);
-		break;
-	case WG_PKT_COOKIE:
+	} else if (t == WG_PKT_COOKIE(sc)) {
 		cook = mtod(m, struct wg_pkt_cookie *);
 
 		if ((remote = noise_remote_index(sc->sc_local, cook->r_idx)) == NULL) {
@@ -1450,7 +1456,7 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 		}
 
 		goto not_authenticated;
-	default:
+	} else {
 		panic("invalid packet in handshake queue");
 	}
 
@@ -1568,7 +1574,7 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	if (m == NULL)
 		goto out;
 	data = mtod(m, struct wg_pkt_data *);
-	data->t = WG_PKT_DATA;
+	data->t = WG_PKT_DATA(sc);
 	data->r_idx = idx;
 	data->nonce = htole64(pkt->p_nonce);
 
@@ -2022,13 +2028,13 @@ wg_skip_junk_input(struct mbuf *m, struct wg_softc *sc)
 	if (m->m_pkthdr.len == sizeof(struct wg_pkt_initiation) +
 	    sc->sc_socket.so_init_packet_junk_size) {
 		assumed_offset = sc->sc_socket.so_init_packet_junk_size;
-		assumed_type = WG_PKT_INITIATION;
+		assumed_type = WG_PKT_INITIATION(sc);
 	}
 	/* Check if this is a response packet with junk */
 	else if (m->m_pkthdr.len == sizeof(struct wg_pkt_response) +
 	    sc->sc_socket.so_response_packet_junk_size) {
 		assumed_offset = sc->sc_socket.so_response_packet_junk_size;
-		assumed_type = WG_PKT_RESPONSE;
+		assumed_type = WG_PKT_RESPONSE(sc);
 	}
 
 	if (assumed_offset == 0)
@@ -2113,11 +2119,11 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 	}
 
 	if ((m->m_pkthdr.len == sizeof(struct wg_pkt_initiation) &&
-		*mtod(m, uint32_t *) == WG_PKT_INITIATION) ||
+		*mtod(m, uint32_t *) == WG_PKT_INITIATION(sc)) ||
 	    (m->m_pkthdr.len == sizeof(struct wg_pkt_response) &&
-		*mtod(m, uint32_t *) == WG_PKT_RESPONSE) ||
+		*mtod(m, uint32_t *) == WG_PKT_RESPONSE(sc)) ||
 	    (m->m_pkthdr.len == sizeof(struct wg_pkt_cookie) &&
-		*mtod(m, uint32_t *) == WG_PKT_COOKIE)) {
+		*mtod(m, uint32_t *) == WG_PKT_COOKIE(sc))) {
 
 		if (wg_queue_enqueue_handshake(&sc->sc_handshake_queue, pkt) != 0) {
 			if_inc_counter(sc->sc_ifp, IFCOUNTER_IQDROPS, 1);
@@ -2125,7 +2131,7 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 		}
 		GROUPTASK_ENQUEUE(&sc->sc_handshake);
 	} else if (m->m_pkthdr.len >= sizeof(struct wg_pkt_data) +
-	    NOISE_AUTHTAG_LEN && *mtod(m, uint32_t *) == WG_PKT_DATA) {
+	    NOISE_AUTHTAG_LEN && *mtod(m, uint32_t *) == WG_PKT_DATA(sc)) {
 
 		/* Pullup whole header to read r_idx below. */
 		if ((pkt->p_mbuf = m_pullup(m, sizeof(struct wg_pkt_data))) == NULL)
@@ -2600,6 +2606,8 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	nvlist_t *nvl;
 	ssize_t size;
 	int err;
+	uint64_t s1 = 0, s2 = 0;
+	uint64_t h[5] = {0};
 
 	ifp = sc->sc_ifp;
 	if (wgd->wgd_size == 0 || wgd->wgd_data == NULL)
@@ -2638,51 +2646,88 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 				sc->sc_socket.so_port = new_port;
 		}
 	}
-    if (nvlist_exists_number(nvl, "jc")) {
+	if (nvlist_exists_number(nvl, "jc")) {
 		uint64_t jc = nvlist_get_number(nvl, "jc");
 		if (jc > UINT8_MAX) {
 			err = EINVAL;
 			goto out_locked;
 		}
-        sc->sc_socket.so_junk_packet_count = jc;
+		sc->sc_socket.so_junk_packet_count = jc;
 	}
-    if (nvlist_exists_number(nvl, "jmin")) {
+	if (nvlist_exists_number(nvl, "jmin")) {
 		uint64_t jmin = nvlist_get_number(nvl, "jmin");
 		if (jmin > 1200) {
 			err = EINVAL;
 			goto out_locked;
 		}
-        sc->sc_socket.so_junk_packet_min_size = jmin;
+		sc->sc_socket.so_junk_packet_min_size = jmin;
 	}
-    if (nvlist_exists_number(nvl, "jmax")) {
+	if (nvlist_exists_number(nvl, "jmax")) {
 		uint64_t jmax = nvlist_get_number(nvl, "jmax");
 		if (jmax > ETHERMTU || jmax < sc->sc_socket.so_junk_packet_min_size) {
 			err = EINVAL;
 			goto out_locked;
 		}
-        sc->sc_socket.so_junk_packet_max_size = jmax;
+		sc->sc_socket.so_junk_packet_max_size = jmax;
 	}
-    uint64_t s1 = 0, s2 = 0;
-    if (nvlist_exists_number(nvl, "s1")) {
+	if (nvlist_exists_number(nvl, "s1")) {
 		s1 = nvlist_get_number(nvl, "s1");
 		if (s1 + sizeof(struct wg_pkt_initiation) > ETHERMTU) {
 			err = EINVAL;
 			goto out_locked;
 		}
-        sc->sc_socket.so_init_packet_junk_size = s1;
+		sc->sc_socket.so_init_packet_junk_size = s1;
 	}
-    if (nvlist_exists_number(nvl, "s2")) {
+	if (nvlist_exists_number(nvl, "s2")) {
 		s2 = nvlist_get_number(nvl, "s2");
 		if (s2 + sizeof(struct wg_pkt_response) > ETHERMTU) {
 			err = EINVAL;
 			goto out_locked;
 		}
-        sc->sc_socket.so_response_packet_junk_size = s2;
+		sc->sc_socket.so_response_packet_junk_size = s2;
 	}
-    if (s1 && s2 && s1 == s2) {
-        err = EINVAL;
-        goto out_locked;
-    }
+	if (s1 && s2 && s1 == s2) {
+		err = EINVAL;
+		goto out_locked;
+	}
+	if (nvlist_exists_number(nvl, "h1")) {
+		h[1] = nvlist_get_number(nvl, "h1");
+		sc->sc_socket.so_pkt_initiation = h[1];
+	}
+	if (nvlist_exists_number(nvl, "h2")) {
+		h[2] = nvlist_get_number(nvl, "h2");
+		sc->sc_socket.so_pkt_response = h[2];
+	}
+	if (nvlist_exists_number(nvl, "h3")) {
+		h[3] = nvlist_get_number(nvl, "h3");
+		sc->sc_socket.so_pkt_cookie = h[3];
+	}
+	if (nvlist_exists_number(nvl, "h4")) {
+		h[4] = nvlist_get_number(nvl, "h4");
+		sc->sc_socket.so_pkt_data = h[4];
+	}
+
+	// Check magic headers
+	for(int i = 1; i <= 4; i++) {
+		if (h[i] == 0) {
+			continue;
+		}
+
+		// Magic headers should be greater than WG_PKT_DATA
+		if (h[i] <= WG_PKT_DEFAULT_MAX) {
+			err = EINVAL;
+			goto out_locked;
+		}
+
+		// Magic headers should be different
+		for(int j = i - 1; j > 0; j--) {
+			if (h[j] && h[i] == h[j]) {
+				err = EINVAL;
+				goto out_locked;
+			}
+		}
+	}
+
 	if (nvlist_exists_binary(nvl, "private-key")) {
 		const void *key = nvlist_get_binary(nvl, "private-key", &size);
 		if (size != WG_KEY_SIZE) {
@@ -2779,6 +2824,14 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 		nvlist_add_number(nvl, "s1", sc->sc_socket.so_init_packet_junk_size);
 	if (sc->sc_socket.so_response_packet_junk_size > 0)
 		nvlist_add_number(nvl, "s2", sc->sc_socket.so_response_packet_junk_size);
+	if (sc->sc_socket.so_pkt_initiation > 0)
+		nvlist_add_number(nvl, "h1", sc->sc_socket.so_pkt_initiation);
+	if (sc->sc_socket.so_pkt_response > 0)
+		nvlist_add_number(nvl, "h2", sc->sc_socket.so_pkt_response);
+	if (sc->sc_socket.so_pkt_cookie > 0)
+		nvlist_add_number(nvl, "h3", sc->sc_socket.so_pkt_cookie);
+	if (sc->sc_socket.so_pkt_data > 0)
+		nvlist_add_number(nvl, "h4", sc->sc_socket.so_pkt_data);
 	if (sc->sc_socket.so_user_cookie != 0)
 		nvlist_add_number(nvl, "user-cookie", sc->sc_socket.so_user_cookie);
 	if (noise_local_keys(sc->sc_local, public_key, private_key) == 0) {
@@ -3045,8 +3098,12 @@ wg_clone_create(struct if_clone *ifc, char *name, size_t len,
 	sc->sc_socket.so_junk_packet_count = 0;
 	sc->sc_socket.so_junk_packet_min_size = 0;
 	sc->sc_socket.so_junk_packet_max_size = 0;
-	sc->sc_socket.so_init_packet_junk_size = 300;
-	sc->sc_socket.so_response_packet_junk_size = 400;
+	sc->sc_socket.so_init_packet_junk_size = 0;
+	sc->sc_socket.so_response_packet_junk_size = 0;
+	sc->sc_socket.so_pkt_initiation = 0;
+	sc->sc_socket.so_pkt_response = 0;
+	sc->sc_socket.so_pkt_cookie = 0;
+	sc->sc_socket.so_pkt_data = 0;
 
 	TAILQ_INIT(&sc->sc_peers);
 	sc->sc_peers_num = 0;
