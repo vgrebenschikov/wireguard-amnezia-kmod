@@ -1,6 +1,4 @@
 
-KMODDIR= /boot/modules
-
 KMOD= if_wg
 
 SRCS= if_wg.c wg_cookie.c wg_crypto.c wg_noise.c
