@@ -2084,7 +2084,10 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 	m_adj(m, offset + sizeof(struct udphdr));
 
 	/* Check if this packet has junk to skip, doing m_pullup if needed*/
-	m = wg_skip_junk_input(m, sc);
+	if ((m = wg_skip_junk_input(m, sc)) == NULL) {
+		if_inc_counter(sc->sc_ifp, IFCOUNTER_IQDROPS, 1);
+		return true;
+	}
 
 	/* Pullup enough to read packet type */
 	if ((m = m_pullup(m, sizeof(uint32_t))) == NULL) {
