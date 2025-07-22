@@ -5,6 +5,7 @@
  * Copyright (c) 2019-2020 Rubicon Communications, LLC (Netgate)
  * Copyright (c) 2021 Kyle Evans <kevans@FreeBSD.org>
  * Copyright (c) 2022 The FreeBSD Foundation
+ * Copyright (C) 2025 Vladimir Grebenshchikov <vova@zote.me>. All Rights Reserved.
  */
 
 #include "opt_inet.h"
