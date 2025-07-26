@@ -818,6 +818,17 @@ wg_socket_bind(struct socket **in_so4, struct socket **in_so6, in_port_t *reques
 		if (ret4 && ret4 != EADDRNOTAVAIL)
 			return (ret4);
 		if (!ret4 && !sin.sin_port) {
+#if __FreeBSD_version >= 1500000
+			struct sockaddr_in bound_sin =
+			    { .sin_len = sizeof(bound_sin) };
+			int ret;
+
+			ret = sosockaddr(so4, (struct sockaddr *)&bound_sin);
+			if (ret)
+				return (ret);
+			port = ntohs(bound_sin.sin_port);
+			sin6.sin6_port = bound_sin.sin_port;
+#else
 			struct sockaddr_in *bound_sin;
 			int ret = so4->so_proto->pr_sockaddr(so4,
 			    (struct sockaddr **)&bound_sin);
@@ -826,6 +837,7 @@ wg_socket_bind(struct socket **in_so4, struct socket **in_so6, in_port_t *reques
 			port = ntohs(bound_sin->sin_port);
 			sin6.sin6_port = bound_sin->sin_port;
 			free(bound_sin, M_SONAME);
+#endif
 		}
 	}
 
@@ -834,6 +846,16 @@ wg_socket_bind(struct socket **in_so4, struct socket **in_so6, in_port_t *reques
 		if (ret6 && ret6 != EADDRNOTAVAIL)
 			return (ret6);
 		if (!ret6 && !sin6.sin6_port) {
+#if __FreeBSD_version >= 1500000
+			struct sockaddr_in6 bound_sin6 =
+			    { .sin6_len = sizeof(bound_sin6) };
+			int ret;
+
+			ret = sosockaddr(so6, (struct sockaddr *)&bound_sin6);
+			if (ret)
+				return (ret);
+			port = ntohs(bound_sin6.sin6_port);
+#else
 			struct sockaddr_in6 *bound_sin6;
 			int ret = so6->so_proto->pr_sockaddr(so6,
 			    (struct sockaddr **)&bound_sin6);
@@ -841,6 +863,7 @@ wg_socket_bind(struct socket **in_so4, struct socket **in_so6, in_port_t *reques
 				return (ret);
 			port = ntohs(bound_sin6->sin6_port);
 			free(bound_sin6, M_SONAME);
+#endif
 		}
 	}
 
