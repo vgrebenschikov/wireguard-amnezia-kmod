@@ -2154,12 +2154,16 @@ wg_skip_junk_input(struct mbuf *m, struct wg_softc *sc)
 	if (assumed_offset == 0)
 		return m;
 
-	m = m_pullup(m, assumed_offset + sizeof(uint32_t));
-	if (m == NULL)
-		return m;
+	if (m->m_len < assumed_offset + sizeof(uint32_t)) {
+		/* pullup only if not whole packet header in mbuf */
+		m = m_pullup(m, assumed_offset + sizeof(uint32_t));
+		if (m == NULL)
+			return m;
+	}
 
 	/* verify packet type */
 	if (*(uint32_t *)mtodo(m, assumed_offset) != assumed_type) {
+		DPRINTF(sc, "Amnezia: wrong type after skip junk in handshake\n");
 		return m;
 	}
 
