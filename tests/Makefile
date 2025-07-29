@@ -1,12 +1,9 @@
 PACKAGE=	tests
 
-# TESTSDIR=	${TESTSBASE}/sys/net
-# BINDIR=		${TESTSDIR}
-
 ATF_TESTS_SH+=	if_wg
+ATF_TESTS_SH+=	if_awg
 
 # The netmap bridge application is used by if_wg tests.
-#.PATH:	${SRCTOP}/tools/tools/netmap
 .PATH:	/usr/src/tools/tools/netmap
 PROGS+=		bridge
 LIBADD.bridge+=	netmap

@@ -30,17 +30,24 @@
 . "$(atf_get_srcdir)/vnet.subr"
 
 awg_config() {
-    jc=$(jot -r 1 3 10)
-    jmin=$(jot -r 1 50 100)
-    jmax=$(jot -r 1 $jmin 1000)
+    for i in 1 2 3 4; do
+        jc=$(jot -r 1 3 10)
+        jmin=$(jot -r 1 50 100)
+        jmax=$(jot -r 1 $jmin 1000)
 
-    s1=$(jot -r 1 15 150)
-    s2=$(jot -r 1 15 150)
+        s1=$(jot -r 1 15 150)   # 1132
+        s2=$(jot -r 1 15 150)   # 1188
 
-    h1=$(jot -r 1 5 4294967295)
-    h2=$(jot -r 1 5 4294967295)
-    h3=$(jot -r 1 5 4294967295)
-    h4=$(jot -r 1 5 4294967295)
+        h1=$(jot -r 1 5 4294967295)
+        h2=$(jot -r 1 5 4294967295)
+        h3=$(jot -r 1 5 4294967295)
+        h4=$(jot -r 1 5 4294967295)
+
+        if [ $(($s1 + 56)) -ne $s2 ] && \
+           [ $(echo -e "$h1\n$h2\n$h3\n$h4" | sort -u | wc -l) -eq 4 ]; then
+            break
+        fi
+    done
 
     echo "jc $jc jmin $jmin jmax $jmax s1 $s1 s2 $s2 h1 $h1 h2 $h2 h3 $h3 h4 $h4"
 }

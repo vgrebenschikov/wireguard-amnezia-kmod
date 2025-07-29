@@ -2801,29 +2801,31 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	}
 	if (nvlist_exists_number(nvl, "jmax")) {
 		uint64_t jmax = nvlist_get_number(nvl, "jmax");
-		if (jmax > ETHERMTU || jmax < sc->sc_socket.so_junk_packet_min_size) {
+		if (jmax > 1280 || jmax <= sc->sc_socket.so_junk_packet_min_size) {
 			err = EINVAL;
 			goto out_locked;
 		}
 		sc->sc_socket.so_junk_packet_max_size = jmax;
 	}
+    uint64_t s1size = sizeof(struct wg_pkt_initiation);
 	if (nvlist_exists_number(nvl, "s1")) {
 		s1 = nvlist_get_number(nvl, "s1");
-		if (s1 + sizeof(struct wg_pkt_initiation) > ETHERMTU) {
+		if (s1 + s1size > 1280) {
 			err = EINVAL;
 			goto out_locked;
 		}
 		sc->sc_socket.so_init_packet_junk_size = s1;
 	}
+    uint64_t s2size = sizeof(struct wg_pkt_response);
 	if (nvlist_exists_number(nvl, "s2")) {
 		s2 = nvlist_get_number(nvl, "s2");
-		if (s2 + sizeof(struct wg_pkt_response) > ETHERMTU) {
+		if (s2 + s2size > 1280) {
 			err = EINVAL;
 			goto out_locked;
 		}
 		sc->sc_socket.so_response_packet_junk_size = s2;
 	}
-	if (s1 && s2 && s1 == s2) {
+	if ((s1 || s2) && (s1 + s1size == s2 + s2size)) {
 		err = EINVAL;
 		goto out_locked;
 	}
