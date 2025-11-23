@@ -226,6 +226,8 @@ struct wg_socket {
 	uint32_t	 so_junk_packet_max_size;	// Jmax
 	uint32_t	 so_init_packet_junk_size;	// S1
 	uint32_t	 so_response_packet_junk_size;	// S2
+	uint32_t	 so_cookie_packet_junk_size;	// S3
+	uint32_t	 so_transport_packet_junk_size;	// S4
 	uint32_t	 so_pkt_initiation;		// H1
 	uint32_t	 so_pkt_response;		// H2
 	uint32_t	 so_pkt_cookie;			// H3
@@ -346,6 +348,7 @@ static void wg_peer_set_endpoint(struct wg_peer *, struct wg_endpoint *);
 static void wg_peer_clear_src(struct wg_peer *);
 static void wg_peer_get_endpoint(struct wg_peer *, struct wg_endpoint *);
 static void wg_send_buf(struct wg_softc *, struct wg_endpoint *, uint8_t *, size_t);
+static void wg_send_buf_junk(struct wg_softc *, struct wg_endpoint *, uint8_t *, size_t, size_t);
 static void wg_send_keepalive(struct wg_peer *);
 static void wg_handshake(struct wg_softc *, struct wg_packet *);
 static void wg_encrypt(struct wg_softc *, struct wg_packet *);
@@ -1053,6 +1056,32 @@ out:
 		DPRINTF(sc, "Unable to send packet: %d\n", ret);
 }
 
+static void
+wg_send_buf_junk(struct wg_softc *sc, struct wg_endpoint *e, uint8_t *buf, size_t len, size_t junk_len)
+{
+	uint8_t *junk_buf;
+	size_t total_len;
+
+	if (junk_len == 0) {
+		wg_send_buf(sc, e, buf, len);
+		return;
+	}
+
+	total_len = len + junk_len;
+	junk_buf = malloc(total_len, M_DEVBUF, M_NOWAIT);
+	if (junk_buf == NULL) {
+		wg_send_buf(sc, e, buf, len);
+		return;
+	}
+
+	arc4random_buf(junk_buf, junk_len);
+	memcpy(junk_buf + junk_len, buf, len);
+
+	wg_send_buf(sc, e, junk_buf, total_len);
+
+	free(junk_buf, M_DEVBUF);
+}
+
 /* Timers */
 static void
 wg_timers_enable(struct wg_peer *peer)
@@ -1432,7 +1461,9 @@ wg_send_cookie(struct wg_softc *sc, struct cookie_macs *cm, uint32_t idx,
 
 	cookie_checker_create_payload(&sc->sc_cookie, cm, pkt.nonce,
 	    pkt.ec, &e->e_remote.r_sa);
-	wg_send_buf(sc, e, (uint8_t *)&pkt, sizeof(pkt));
+
+	wg_send_buf_junk(sc, e, (uint8_t *)&pkt, sizeof(pkt),
+	    sc->sc_socket.so_cookie_packet_junk_size);
 }
 
 static void
@@ -1682,6 +1713,31 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	/* Do encryption */
 	if (noise_keypair_encrypt(pkt->p_keypair, &idx, pkt->p_nonce, m) != 0)
 		goto out;
+
+	/* Add junk data if S4 is configured */
+	if (sc->sc_socket.so_transport_packet_junk_size > 0) {
+		struct mbuf *junk_m;
+		uint8_t *junk;
+		size_t junk_size = sc->sc_socket.so_transport_packet_junk_size;
+
+		junk_m = m_get(M_NOWAIT, MT_DATA);
+		if (junk_m != NULL) {
+			junk = mtod(junk_m, uint8_t *);
+			arc4random_buf(junk, junk_size);
+			junk_m->m_len = junk_size;
+			junk_m->m_pkthdr.len = junk_size;
+
+			/* Prepend junk data */
+			M_PREPEND(junk_m, m->m_pkthdr.len, M_NOWAIT);
+			if (junk_m != NULL) {
+				memcpy(mtod(junk_m, uint8_t *) + junk_size, mtod(m, uint8_t *), m->m_pkthdr.len);
+				m_freem(m);
+				m = junk_m;
+			} else {
+				m_freem(junk_m);
+			}
+		}
+	}
 
 	/* Put header into packet */
 	M_PREPEND(m, sizeof(struct wg_pkt_data), M_NOWAIT);
@@ -2237,6 +2293,20 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 #endif
 	default:
 		goto error;
+	}
+
+	/* Check for cookie packet with junk data */
+	if (m->m_pkthdr.len == sizeof(struct wg_pkt_cookie) + sc->sc_socket.so_cookie_packet_junk_size &&
+	    *mtod(m, uint32_t *) == WG_PKT_COOKIE(sc)) {
+		/* Remove junk data */
+		m_adj(m, sc->sc_socket.so_cookie_packet_junk_size);
+	}
+
+	/* Check for transport packet with junk data */
+	if (m->m_pkthdr.len >= sizeof(struct wg_pkt_data) + NOISE_AUTHTAG_LEN + sc->sc_socket.so_transport_packet_junk_size &&
+	    *mtod(m, uint32_t *) == WG_PKT_DATA(sc)) {
+		/* Remove junk data */
+		m_adj(m, sc->sc_socket.so_transport_packet_junk_size);
 	}
 
 	if ((m->m_pkthdr.len == sizeof(struct wg_pkt_initiation) &&
@@ -2829,6 +2899,24 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		err = EINVAL;
 		goto out_locked;
 	}
+	if (nvlist_exists_number(nvl, "s3")) {
+		uint64_t s3 = nvlist_get_number(nvl, "s3");
+		uint64_t s3size = sizeof(struct wg_pkt_cookie);
+		if (s3 + s3size > 1280) {
+			err = EINVAL;
+			goto out_locked;
+		}
+		sc->sc_socket.so_cookie_packet_junk_size = s3;
+	}
+	if (nvlist_exists_number(nvl, "s4")) {
+		uint64_t s4 = nvlist_get_number(nvl, "s4");
+		uint64_t s4size = sizeof(struct wg_pkt_data);
+		if (s4 + s4size > 1280) {
+			err = EINVAL;
+			goto out_locked;
+		}
+		sc->sc_socket.so_transport_packet_junk_size = s4;
+	}
 	if (nvlist_exists_number(nvl, "h1")) {
 		h[1] = nvlist_get_number(nvl, "h1");
 		sc->sc_socket.so_pkt_initiation = h[1];
@@ -2963,6 +3051,10 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 		nvlist_add_number(nvl, "s1", sc->sc_socket.so_init_packet_junk_size);
 	if (sc->sc_socket.so_response_packet_junk_size > 0)
 		nvlist_add_number(nvl, "s2", sc->sc_socket.so_response_packet_junk_size);
+	if (sc->sc_socket.so_cookie_packet_junk_size > 0)
+		nvlist_add_number(nvl, "s3", sc->sc_socket.so_cookie_packet_junk_size);
+	if (sc->sc_socket.so_transport_packet_junk_size > 0)
+		nvlist_add_number(nvl, "s4", sc->sc_socket.so_transport_packet_junk_size);
 	if (sc->sc_socket.so_pkt_initiation > 0)
 		nvlist_add_number(nvl, "h1", sc->sc_socket.so_pkt_initiation);
 	if (sc->sc_socket.so_pkt_response > 0)
