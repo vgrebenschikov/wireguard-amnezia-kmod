@@ -1716,26 +1716,22 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 
 	/* Add junk data if S4 is configured */
 	if (sc->sc_socket.so_transport_packet_junk_size > 0) {
-		struct mbuf *junk_m;
+		struct mbuf *junk_m, *old_m;
 		uint8_t *junk;
 		size_t junk_size = sc->sc_socket.so_transport_packet_junk_size;
 
-		junk_m = m_get(M_NOWAIT, MT_DATA);
+		/* Create new mbuf with packet header for junk + data */
+		junk_m = m_get2(junk_size + m->m_pkthdr.len, M_NOWAIT, MT_DATA, M_PKTHDR);
 		if (junk_m != NULL) {
 			junk = mtod(junk_m, uint8_t *);
 			arc4random_buf(junk, junk_size);
-			junk_m->m_len = junk_size;
-			junk_m->m_pkthdr.len = junk_size;
+			memcpy(junk + junk_size, mtod(m, uint8_t *), m->m_pkthdr.len);
+			junk_m->m_len = junk_size + m->m_pkthdr.len;
+			junk_m->m_pkthdr.len = junk_size + m->m_pkthdr.len;
 
-			/* Prepend junk data */
-			M_PREPEND(junk_m, m->m_pkthdr.len, M_NOWAIT);
-			if (junk_m != NULL) {
-				memcpy(mtod(junk_m, uint8_t *) + junk_size, mtod(m, uint8_t *), m->m_pkthdr.len);
-				m_freem(m);
-				m = junk_m;
-			} else {
-				m_freem(junk_m);
-			}
+			old_m = m;
+			m = junk_m;
+			m_freem(old_m);
 		}
 	}
 
