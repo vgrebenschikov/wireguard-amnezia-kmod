@@ -2814,7 +2814,20 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	ssize_t size;
 	int err;
 	uint64_t s1 = 0, s2 = 0;
-	uint64_t h[5] = {0};
+
+    struct {
+        const char *name;
+        uint32_t *header;
+        uint32_t newv;
+        uint32_t curv;
+    } hparams[] = {
+        {"h1", &sc->sc_socket.so_pkt_initiation, 0, 0},
+        {"h2", &sc->sc_socket.so_pkt_response, 0, 0},
+        {"h3", &sc->sc_socket.so_pkt_cookie, 0, 0},
+        {"h4", &sc->sc_socket.so_pkt_data, 0, 0},
+    };
+    size_t hparams_count = sizeof(hparams) / sizeof(hparams[0]);
+
 
 	ifp = sc->sc_ifp;
 	if (wgd->wgd_size == 0 || wgd->wgd_data == NULL)
@@ -2917,43 +2930,61 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		}
 		sc->sc_socket.so_transport_packet_junk_size = s4;
 	}
-	if (nvlist_exists_number(nvl, "h1")) {
-		h[1] = nvlist_get_number(nvl, "h1");
-		sc->sc_socket.so_pkt_initiation = h[1];
-	}
-	if (nvlist_exists_number(nvl, "h2")) {
-		h[2] = nvlist_get_number(nvl, "h2");
-		sc->sc_socket.so_pkt_response = h[2];
-	}
-	if (nvlist_exists_number(nvl, "h3")) {
-		h[3] = nvlist_get_number(nvl, "h3");
-		sc->sc_socket.so_pkt_cookie = h[3];
-	}
-	if (nvlist_exists_number(nvl, "h4")) {
-		h[4] = nvlist_get_number(nvl, "h4");
-		sc->sc_socket.so_pkt_data = h[4];
-	}
+
+    for (int i = 0; i < hparams_count; i++) {
+        hparams[i].curv = *hparams[i].header;
+
+        if (nvlist_exists_binary(nvl, hparams[i].name)) {
+            size_t size;
+            const char *value = nvlist_get_binary(nvl, hparams[i].name, &size);
+            if (value && size > 0 && value[size - 1] == '\0') {
+                char *endptr;
+                uint32_t val = strtoul(value, &endptr, 10);
+
+                if (*endptr != '\0') {
+                    err = EINVAL;
+                    goto out_locked;
+                }
+                hparams[i].newv = hparams[i].curv = val;
+            } else {
+                err = EINVAL;
+                goto out_locked;
+            }
+        }
+    }
 
 	// Check magic headers
-	for(int i = 1; i <= 4; i++) {
-		if (h[i] == 0) {
+	for(int i = 0; i < hparams_count; i++) {
+		if (hparams[i].newv == 0) {
 			continue;
 		}
 
 		// Magic headers should be greater than WG_PKT_DATA
-		if (h[i] <= WG_PKT_DEFAULT_MAX) {
+		if (hparams[i].newv <= WG_PKT_DEFAULT_MAX) {
+            DPRINTF(sc, "Magic Header should be above %u: %s=%u\n",
+                    WG_PKT_DEFAULT_MAX, hparams[i].name, hparams[i].newv);
 			err = EINVAL;
 			goto out_locked;
 		}
 
 		// Magic headers should be different
-		for(int j = i - 1; j > 0; j--) {
-			if (h[j] && h[i] == h[j]) {
+		for(int j = i - 1; j >= 0; j--) {
+			if (hparams[j].curv && hparams[i].newv == hparams[j].curv) {
+                DPRINTF(sc, "Duplicate Magic Header: %s=%u == %s=%u\n",
+                        hparams[i].name, hparams[i].newv,
+                        hparams[j].name, hparams[j].curv);
 				err = EINVAL;
 				goto out_locked;
 			}
 		}
 	}
+
+    // assign magic headers
+    for(int i = 0; i < hparams_count; i++) {
+        if (hparams[i].newv)
+            *hparams[i].header = hparams[i].newv;
+    }
+
 
 	if (nvlist_exists_binary(nvl, "private-key")) {
 		const void *key = nvlist_get_binary(nvl, "private-key", &size);
@@ -3033,6 +3064,16 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 	void *packed;
 	int err = 0;
 
+    struct {
+        const char *name;
+        uint32_t header;
+    } hparams[] = {
+        {"h1", sc->sc_socket.so_pkt_initiation},
+        {"h2", sc->sc_socket.so_pkt_response},
+        {"h3", sc->sc_socket.so_pkt_cookie},
+        {"h4", sc->sc_socket.so_pkt_data},
+    };
+
 	nvl = nvlist_create(0);
 	if (!nvl)
 		return (ENOMEM);
@@ -3055,14 +3096,15 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 		nvlist_add_number(nvl, "s3", sc->sc_socket.so_cookie_packet_junk_size);
 	if (sc->sc_socket.so_transport_packet_junk_size > 0)
 		nvlist_add_number(nvl, "s4", sc->sc_socket.so_transport_packet_junk_size);
-	if (sc->sc_socket.so_pkt_initiation > 0)
-		nvlist_add_number(nvl, "h1", sc->sc_socket.so_pkt_initiation);
-	if (sc->sc_socket.so_pkt_response > 0)
-		nvlist_add_number(nvl, "h2", sc->sc_socket.so_pkt_response);
-	if (sc->sc_socket.so_pkt_cookie > 0)
-		nvlist_add_number(nvl, "h3", sc->sc_socket.so_pkt_cookie);
-	if (sc->sc_socket.so_pkt_data > 0)
-		nvlist_add_number(nvl, "h4", sc->sc_socket.so_pkt_data);
+
+    for (i = 0; i < sizeof(hparams) / sizeof(hparams[0]); i++) {
+        if (hparams[i].header) {
+            char value[11];
+            size_t len = snprintf(value, sizeof(value), "%u", hparams[i].header);
+            nvlist_add_binary(nvl, hparams[i].name, value, len);
+        }
+    }
+
 	if (sc->sc_socket.so_user_cookie != 0)
 		nvlist_add_number(nvl, "user-cookie", sc->sc_socket.so_user_cookie);
 	if (noise_local_keys(sc->sc_local, public_key, private_key) == 0) {

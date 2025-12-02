@@ -37,6 +37,8 @@ awg_config() {
 
         s1=$(jot -r 1 15 1132)
         s2=$(jot -r 1 15 1188)
+        s3=$(jot -r 1 15 100)
+        s4=$(jot -r 1 15 60)
 
         h1=$(jot -r 1 5 4294967295)
         h2=$(jot -r 1 5 4294967295)
@@ -49,7 +51,10 @@ awg_config() {
         fi
     done
 
-    echo "jc $jc jmin $jmin jmax $jmax s1 $s1 s2 $s2 h1 $h1 h2 $h2 h3 $h3 h4 $h4"
+    echo \
+        jc $jc jmin $jmin jmax $jmax \
+        s1 $s1 s2 $s2 s3 $s3 s4 $s4 \
+        h1 $h1 h2 $h2 h3 $h3 h4 $h4
 }
 
 atf_test_case "awg_configuration" "cleanup"
@@ -63,7 +68,7 @@ awg_configuration_body()
 {
 	local epair pri1 pri2 pub1 pub2 wg1 wg2
         local endpoint1 endpoint2 tunnel1 tunnel2
-    set -x
+
 	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
 
 	wg=$(ifconfig wg create)
@@ -108,8 +113,11 @@ awg_configuration_body()
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
         awg set $wg s1 $s1 s2 $s2
 
+    s1=$(jot -r 1 71 1132)
+    s2=$(($s1 - 56))
+
 	atf_check -s exit:0 -o ignore \
-        awg set $wg s1 $s2 s2 $s1
+        awg set $wg s1 $s1 s2 $s2
 
 	atf_check -s exit:0 -o ignore \
         awg set $wg s1 $s1 s2 $s1
@@ -139,6 +147,12 @@ awg_configuration_body()
     h=$(jot -r 1 5 4294967295)
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
         awg set $wg h1 0 h2 $h h3 $h h4 0
+
+	atf_check -s exit:0 -o ignore \
+        awg set $wg $(awg_config)
+
+    atf_check -s exit:0 -o ignore \
+        awg show $wg
 
 }
 

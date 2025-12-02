@@ -35,8 +35,10 @@ awg_config() {
         jmin=$(jot -r 1 50 100)
         jmax=$(jot -r 1 $jmin 1000)
 
-        s1=$(jot -r 1 15 150)   # 1132
-        s2=$(jot -r 1 15 150)   # 1188
+        s1=$(jot -r 1 15 1132)
+        s2=$(jot -r 1 15 1188)
+        s3=$(jot -r 1 15 100)
+        s4=$(jot -r 1 15 60)
 
         h1=$(jot -r 1 5 4294967295)
         h2=$(jot -r 1 5 4294967295)
@@ -49,7 +51,10 @@ awg_config() {
         fi
     done
 
-    echo "jc $jc jmin $jmin jmax $jmax s1 $s1 s2 $s2 h1 $h1 h2 $h2 h3 $h3 h4 $h4"
+    echo \
+        jc $jc jmin $jmin jmax $jmax \
+        s1 $s1 s2 $s2 s3 $s3 s4 $s4 \
+        h1 $h1 h2 $h2 h3 $h3 h4 $h4
 }
 
 atf_test_case "wg_basic" "cleanup"
