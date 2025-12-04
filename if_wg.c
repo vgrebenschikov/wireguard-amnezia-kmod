@@ -1714,27 +1714,6 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	if (noise_keypair_encrypt(pkt->p_keypair, &idx, pkt->p_nonce, m) != 0)
 		goto out;
 
-	/* Add junk data if S4 is configured */
-	if (sc->sc_socket.so_transport_packet_junk_size > 0) {
-		struct mbuf *junk_m, *old_m;
-		uint8_t *junk;
-		size_t junk_size = sc->sc_socket.so_transport_packet_junk_size;
-
-		/* Create new mbuf with packet header for junk + data */
-		junk_m = m_get2(junk_size + m->m_pkthdr.len, M_NOWAIT, MT_DATA, M_PKTHDR);
-		if (junk_m != NULL) {
-			junk = mtod(junk_m, uint8_t *);
-			arc4random_buf(junk, junk_size);
-			memcpy(junk + junk_size, mtod(m, uint8_t *), m->m_pkthdr.len);
-			junk_m->m_len = junk_size + m->m_pkthdr.len;
-			junk_m->m_pkthdr.len = junk_size + m->m_pkthdr.len;
-
-			old_m = m;
-			m = junk_m;
-			m_freem(old_m);
-		}
-	}
-
 	/* Put header into packet */
 	M_PREPEND(m, sizeof(struct wg_pkt_data), M_NOWAIT);
 	if (m == NULL)
@@ -1743,6 +1722,17 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	data->t = WG_PKT_DATA(sc);
 	data->r_idx = idx;
 	data->nonce = htole64(pkt->p_nonce);
+
+	/* Add junk data if S4 is configured (before header) */
+	if (sc->sc_socket.so_transport_packet_junk_size > 0) {
+		size_t junk_size = sc->sc_socket.so_transport_packet_junk_size;
+
+		M_PREPEND(m, junk_size, M_NOWAIT);
+		if (m == NULL)
+			goto out;
+
+		arc4random_buf(mtod(m, uint8_t *), junk_size);
+	}
 
 	wg_mbuf_reset(m);
 	state = WG_PACKET_CRYPTED;
@@ -2186,8 +2176,19 @@ wg_skip_junk_input(struct mbuf *m, struct wg_softc *sc)
 	size_t assumed_offset = 0;
 	uint32_t assumed_type = 0;
 
+	/* s1 == 0 means no junk before initiation packet - check by size */
 	if (!sc->sc_socket.so_init_packet_junk_size &&
-	    !sc->sc_socket.so_response_packet_junk_size)
+	    m->m_pkthdr.len == sizeof(struct wg_pkt_initiation))
+		return m;
+
+	/* s2 == 0 means no junk before response packet - check by size */
+	if (!sc->sc_socket.so_response_packet_junk_size &&
+	    m->m_pkthdr.len == sizeof(struct wg_pkt_response))
+		return m;
+
+	/* s3 == 0 means no junk before cookie packet - check by size */
+	if (!sc->sc_socket.so_cookie_packet_junk_size &&
+	    m->m_pkthdr.len == sizeof(struct wg_pkt_cookie))
 		return m;
 
 	/* Check if this is an initiation packet with junk */
@@ -2201,6 +2202,18 @@ wg_skip_junk_input(struct mbuf *m, struct wg_softc *sc)
 	    sc->sc_socket.so_response_packet_junk_size) {
 		assumed_offset = sc->sc_socket.so_response_packet_junk_size;
 		assumed_type = WG_PKT_RESPONSE(sc);
+	}
+	/* Check if this is a cookie packet with junk */
+	else if (m->m_pkthdr.len == sizeof(struct wg_pkt_cookie) +
+	    sc->sc_socket.so_cookie_packet_junk_size) {
+		assumed_offset = sc->sc_socket.so_cookie_packet_junk_size;
+		assumed_type = WG_PKT_COOKIE(sc);
+	}
+	/* Check if this is a data packet with junk */
+	else if (m->m_pkthdr.len >= sizeof(struct wg_pkt_data) +
+	    sc->sc_socket.so_transport_packet_junk_size) {
+		assumed_offset = sc->sc_socket.so_transport_packet_junk_size;
+		assumed_type = WG_PKT_DATA(sc);
 	}
 
 	if (assumed_offset == 0)
@@ -2289,20 +2302,6 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 #endif
 	default:
 		goto error;
-	}
-
-	/* Check for cookie packet with junk data */
-	if (m->m_pkthdr.len == sizeof(struct wg_pkt_cookie) + sc->sc_socket.so_cookie_packet_junk_size &&
-	    *mtod(m, uint32_t *) == WG_PKT_COOKIE(sc)) {
-		/* Remove junk data */
-		m_adj(m, sc->sc_socket.so_cookie_packet_junk_size);
-	}
-
-	/* Check for transport packet with junk data */
-	if (m->m_pkthdr.len >= sizeof(struct wg_pkt_data) + NOISE_AUTHTAG_LEN + sc->sc_socket.so_transport_packet_junk_size &&
-	    *mtod(m, uint32_t *) == WG_PKT_DATA(sc)) {
-		/* Remove junk data */
-		m_adj(m, sc->sc_socket.so_transport_packet_junk_size);
 	}
 
 	if ((m->m_pkthdr.len == sizeof(struct wg_pkt_initiation) &&
