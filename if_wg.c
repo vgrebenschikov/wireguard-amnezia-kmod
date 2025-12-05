@@ -2864,6 +2864,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	if (nvlist_exists_number(nvl, "jc")) {
 		uint64_t jc = nvlist_get_number(nvl, "jc");
 		if (jc > UINT8_MAX) {
+            DPRINTF(sc, "jc=%lu is too large\n", jc);
 			err = EINVAL;
 			goto out_locked;
 		}
@@ -2872,6 +2873,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	if (nvlist_exists_number(nvl, "jmin")) {
 		uint64_t jmin = nvlist_get_number(nvl, "jmin");
 		if (jmin > 1200) {
+            DPRINTF(sc, "jmin=%lu is too large, should be less than 1200\n", jmin);
 			err = EINVAL;
 			goto out_locked;
 		}
@@ -2880,6 +2882,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	if (nvlist_exists_number(nvl, "jmax")) {
 		uint64_t jmax = nvlist_get_number(nvl, "jmax");
 		if (jmax > 1280 || jmax <= sc->sc_socket.so_junk_packet_min_size) {
+            DPRINTF(sc, "jmax=%lu is too large, should be less than 1280 and greater than jmin\n", jmax);
 			err = EINVAL;
 			goto out_locked;
 		}
@@ -2889,6 +2892,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	if (nvlist_exists_number(nvl, "s1")) {
 		s1 = nvlist_get_number(nvl, "s1");
 		if (s1 + s1size > 1280) {
+            DPRINTF(sc, "s1=%lu is too large, should be less than %lu\n", s1, 1280 - s1size);
 			err = EINVAL;
 			goto out_locked;
 		}
@@ -2898,12 +2902,14 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	if (nvlist_exists_number(nvl, "s2")) {
 		s2 = nvlist_get_number(nvl, "s2");
 		if (s2 + s2size > 1280) {
+            DPRINTF(sc, "s2=%lu is too large, should be less than %lu\n", s2, 1280 - s2size);
 			err = EINVAL;
 			goto out_locked;
 		}
 		sc->sc_socket.so_response_packet_junk_size = s2;
 	}
 	if ((s1 || s2) && (s1 + s1size == s2 + s2size)) {
+        DPRINTF(sc, "s1 + %lu and s2 must be different\n", s1size - s2size);
 		err = EINVAL;
 		goto out_locked;
 	}
@@ -2911,6 +2917,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		uint64_t s3 = nvlist_get_number(nvl, "s3");
 		uint64_t s3size = sizeof(struct wg_pkt_cookie);
 		if (s3 + s3size > 1280) {
+            DPRINTF(sc, "s3=%lu is too large, should be less than %lu\n", s3, 1280 - s3size);
 			err = EINVAL;
 			goto out_locked;
 		}
@@ -2920,6 +2927,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		uint64_t s4 = nvlist_get_number(nvl, "s4");
 		uint64_t s4size = sizeof(struct wg_pkt_data);
 		if (s4 + s4size > 1280) {
+            DPRINTF(sc, "s4=%lu is too large, should be less than %lu\n", s4, 1280 - s4size);
 			err = EINVAL;
 			goto out_locked;
 		}
@@ -2937,11 +2945,13 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
                 uint32_t val = strtoul(value, &endptr, 10);
 
                 if (*endptr != '\0') {
+                    DPRINTF(sc, "%s: %s is not a valid number\n", hparams[i].name, value);
                     err = EINVAL;
                     goto out_locked;
                 }
                 hparams[i].newv = hparams[i].curv = val;
             } else {
+                DPRINTF(sc, "%s: value is not a valid string\n", hparams[i].name);
                 err = EINVAL;
                 goto out_locked;
             }

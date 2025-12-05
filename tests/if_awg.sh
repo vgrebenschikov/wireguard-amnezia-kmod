@@ -71,7 +71,7 @@ awg_configuration_body()
 
 	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
 
-	wg=$(ifconfig wg create)
+	wg=$(ifconfig wg create debug)
 
     # jc/jmin/jmax
 
@@ -197,12 +197,12 @@ wide_range_parameters_body()
 	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
 	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
 
-	wg1=$(jexec wgtest1 ifconfig wg create)
+	wg1=$(jexec wgtest1 ifconfig wg create debug)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
 	    private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
 
-	wg2=$(jexec wgtest2 ifconfig wg create)
+	wg2=$(jexec wgtest2 ifconfig wg create debug)
 	echo "$pri2" | jexec wgtest2 wg set $wg2 listen-port 12345 \
 	    private-key /dev/stdin
 	pub2=$(jexec wgtest2 wg show $wg2 public-key)
