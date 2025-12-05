@@ -3096,7 +3096,7 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
         if (hparams[i].header) {
             char value[11];
             size_t len = snprintf(value, sizeof(value), "%u", hparams[i].header);
-            nvlist_add_binary(nvl, hparams[i].name, value, len);
+            nvlist_add_binary(nvl, hparams[i].name, value, len + 1); // +1 for the null terminator
         }
     }
 
