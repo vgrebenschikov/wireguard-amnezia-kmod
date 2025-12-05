@@ -233,8 +233,79 @@ wide_range_parameters_cleanup()
 	vnet_cleanup
 }
 
+atf_test_case "amneziawg_go" "cleanup"
+amneziawg_go_head()
+{
+	atf_set descr 'Create a wg(4)<->amenziawg-go tunnel over an epair and pass traffic between jails'
+	atf_set require.user root
+}
+
+amneziawg_go_body()
+{
+	local epair pri1 pri2 pub1 pub2 wg1 wg2
+        local endpoint1 endpoint2 tunnel1 tunnel2
+
+	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
+
+	pri1=$(wg genkey)
+	pri2=$(wg genkey)
+
+	endpoint1=192.168.2.1
+	endpoint2=192.168.2.2
+	tunnel1=169.254.0.1
+	tunnel2=169.254.0.2
+
+	epair=$(vnet_mkepair)
+
+	vnet_init
+
+	vnet_mkjail wgtest1 ${epair}a
+	vnet_mkjail wgtest2 ${epair}b
+
+    awg_cfg=$(awg_config)
+
+	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
+	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
+
+	wg1=$(jexec wgtest1 ifconfig wg create)
+	echo "$pri1" | jexec wgtest1 awg set $wg1 listen-port 12345 private-key /dev/stdin
+	pub1=$(jexec wgtest1 awg show $wg1 public-key)
+
+    wg2=wg7
+    jexec wgtest2 pkill -9 amneziawg-go || true; sleep 1
+	jexec wgtest2 amneziawg-go $wg2 ; sleep 3
+	echo "$pri2" | jexec wgtest2 awg set $wg2 listen-port 12345 private-key /dev/stdin
+	pub2=$(jexec wgtest2 awg show $wg2 public-key)
+
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest1 awg set $wg1 peer "$pub2" \
+	    endpoint ${endpoint2}:12345 allowed-ips ${tunnel2}/32
+	atf_check -s exit:0 -o ignore \
+        jexec wgtest1 awg set $wg1 $awg_cfg
+	atf_check -s exit:0 \
+	    jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up debug
+
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest2 awg set $wg2 peer "$pub1" \
+	    endpoint ${endpoint1}:12345 allowed-ips ${tunnel1}/32
+	atf_check -s exit:0 -o ignore \
+        jexec wgtest2 awg set $wg2 $awg_cfg
+	atf_check -s exit:0 \
+	    jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up debug
+
+	# Generous timeout since the handshake takes some time.
+	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 -t 5 $tunnel2
+	atf_check -s exit:0 -o ignore jexec wgtest2 ping -c 1 $tunnel1
+}
+
+amneziawg_go_cleanup()
+{
+	vnet_cleanup
+}
+
 atf_init_test_cases()
 {
 	atf_add_test_case "awg_configuration"
 	atf_add_test_case "wide_range_parameters"
+	atf_add_test_case "amneziawg_go"
 }
