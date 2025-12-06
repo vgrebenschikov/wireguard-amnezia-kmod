@@ -1,0 +1,8 @@
+CompileFlags:
+  Add:
+    - -D_KERNEL
+    - -DKLD_MODULE
+    - -DINET
+    - -DINET6
+    - -I../freebsd-src/sys
+    - -I.
