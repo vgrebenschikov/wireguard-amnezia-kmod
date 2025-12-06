@@ -53,124 +53,18 @@ awg_config() {
 
     echo \
         jc $jc jmin $jmin jmax $jmax \
-        s1 $s1 s2 $s2 s3 $s3 s4 $s4 \
+        s1 $s1 s2 $s2 s3 $s3 s4 $s4
         h1 $h1 h2 $h2 h3 $h3 h4 $h4
 }
 
-atf_test_case "awg_configuration" "cleanup"
-awg_configuration_head()
+atf_test_case "wg_basic" "cleanup"
+wg_basic_head()
 {
-	atf_set descr 'Create a awg(4) and test configuration options'
+	atf_set descr 'Create a wg(4) tunnel over an epair and pass traffic between jails'
 	atf_set require.user root
 }
 
-awg_configuration_body()
-{
-	local epair pri1 pri2 pub1 pub2 wg1 wg2
-        local endpoint1 endpoint2 tunnel1 tunnel2
-
-	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
-
-	wg=$(ifconfig wg create debug)
-
-    # jc/jmin/jmax
-
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg jc 256
-
-	atf_check -s exit:0 -o ignore \
-        awg set $wg jc 255
-
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg jmax 1281
-
-	atf_check -s exit:0 -o ignore \
-        awg set $wg jmax 1280
-
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg jmin 1280 jmax 1280
-
-	jx=$(jot -r 1 10 1280)
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg jmin $jx jmax $jx
-
-	jmin=$(jot -r 1 10 80)
-	jdlt=$(jot -r 1 $jmin 1000)
-    jmax=$(($jmin + $jdlt))
-	atf_check -s exit:0 -o ignore \
-        awg set $wg jmin $jmin jmax $jmax
-
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg jmin $jmax jmax $jmin
-
-    # s1/s2
-
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg s1 100 s2 156
-
-    s1=$(jot -r 1 15 1132)
-    s2=$(($s1 + 56))
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg s1 $s1 s2 $s2
-
-    s1=$(jot -r 1 71 1132)
-    s2=$(($s1 - 56))
-
-	atf_check -s exit:0 -o ignore \
-        awg set $wg s1 $s1 s2 $s2
-
-	atf_check -s exit:0 -o ignore \
-        awg set $wg s1 $s1 s2 $s1
-
-    # h1/h2/h3/h4
-
-    h=$(jot -r 1 5 4294967295)
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg h1 $h h2 $h
-
-    h=$(jot -r 1 5 4294967295)
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg h1 $h h3 $h
-
-    h=$(jot -r 1 5 4294967295)
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg h1 $h h4 $h
-
-    h=$(jot -r 1 5 4294967295)
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg h1 0 h2 $h h3 $h
-
-    h=$(jot -r 1 5 4294967295)
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg h1 0 h2 0 h3 $h h4 $h
-
-    h=$(jot -r 1 5 4294967295)
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg h1 0 h2 $h h3 $h h4 0
-
-	atf_check -s exit:0 -o ignore \
-        awg set $wg $(awg_config)
-
-    atf_check -s exit:0 -o ignore \
-        awg show $wg
-
-}
-
-awg_configuration_cleanup()
-{
-    for i in $(ifconfig -g wg); do
-        ifconfig $i destroy
-    done
-}
-
-atf_test_case "wide_range_parameters" "cleanup"
-wide_range_parameters_head()
-{
-	atf_set descr 'Create a awg(4) and test wide range parameters'
-	atf_set require.user root
-}
-
-wide_range_parameters_body()
+wg_basic_body()
 {
 	local epair pri1 pri2 pub1 pub2 wg1 wg2
         local endpoint1 endpoint2 tunnel1 tunnel2
@@ -185,6 +79,9 @@ wide_range_parameters_body()
 	tunnel1=169.254.0.1
 	tunnel2=169.254.0.2
 
+    jail -r wgtest1 2> /dev/null || true
+    jail -r wgtest2 2> /dev/null || true
+
 	epair=$(vnet_mkepair)
 
 	vnet_init
@@ -197,12 +94,12 @@ wide_range_parameters_body()
 	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
 	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
 
-	wg1=$(jexec wgtest1 ifconfig wg create debug)
+	wg1=$(jexec wgtest1 ifconfig wg create name wg1)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
 	    private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
 
-	wg2=$(jexec wgtest2 ifconfig wg create debug)
+	wg2=$(jexec wgtest2 ifconfig wg create name wg2)
 	echo "$pri2" | jexec wgtest2 wg set $wg2 listen-port 12345 \
 	    private-key /dev/stdin
 	pub2=$(jexec wgtest2 wg show $wg2 public-key)
@@ -228,22 +125,23 @@ wide_range_parameters_body()
 	atf_check -s exit:0 -o ignore jexec wgtest2 ping -c 1 $tunnel1
 }
 
-wide_range_parameters_cleanup()
+wg_basic_cleanup()
 {
 	vnet_cleanup
 }
 
-atf_test_case "amneziawg_go" "cleanup"
-amneziawg_go_head()
+atf_test_case "wg_basic_crossaf" "cleanup"
+wg_basic_crossaf_head()
 {
-	atf_set descr 'Create a wg(4)<->amenziawg-go tunnel over an epair and pass traffic between jails'
+	atf_set descr 'Create a wg(4) tunnel and pass IPv4 traffic over an IPv6 nexthop'
 	atf_set require.user root
 }
 
-amneziawg_go_body()
+wg_basic_crossaf_body()
 {
 	local epair pri1 pri2 pub1 pub2 wg1 wg2
-        local endpoint1 endpoint2 tunnel1 tunnel2
+	local endpoint1 endpoint2 tunnel1 tunnel2
+	local testnet testlocal testremote
 
 	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
 
@@ -252,8 +150,12 @@ amneziawg_go_body()
 
 	endpoint1=192.168.2.1
 	endpoint2=192.168.2.2
-	tunnel1=169.254.0.1
-	tunnel2=169.254.0.2
+	tunnel1=2001:db8:1::1
+	tunnel2=2001:db8:1::2
+
+	testnet=192.168.3.0/24
+	testlocal=192.168.3.1
+	testremote=192.168.3.2
 
 	epair=$(vnet_mkepair)
 
@@ -268,44 +170,546 @@ amneziawg_go_body()
 	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
 
 	wg1=$(jexec wgtest1 ifconfig wg create)
-	echo "$pri1" | jexec wgtest1 awg set $wg1 listen-port 12345 private-key /dev/stdin
-	pub1=$(jexec wgtest1 awg show $wg1 public-key)
+	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
+	    private-key /dev/stdin
+	pub1=$(jexec wgtest1 wg show $wg1 public-key)
+    jexec wgtest1 awg set $wg1 $awg_cfg
 
-    wg2=wg7
-    jexec wgtest2 pkill -9 amneziawg-go || true; sleep 1
-	jexec wgtest2 amneziawg-go $wg2 ; sleep 3
-	echo "$pri2" | jexec wgtest2 awg set $wg2 listen-port 12345 private-key /dev/stdin
-	pub2=$(jexec wgtest2 awg show $wg2 public-key)
+	wg2=$(jexec wgtest2 ifconfig wg create)
+	echo "$pri2" | jexec wgtest2 wg set $wg2 listen-port 12345 \
+	    private-key /dev/stdin
+	pub2=$(jexec wgtest2 wg show $wg2 public-key)
+    jexec wgtest2 awg set $wg2 $awg_cfg
 
 	atf_check -s exit:0 -o ignore \
-	    jexec wgtest1 awg set $wg1 peer "$pub2" \
-	    endpoint ${endpoint2}:12345 allowed-ips ${tunnel2}/32
-	atf_check -s exit:0 -o ignore \
-        jexec wgtest1 awg set $wg1 $awg_cfg
+	    jexec wgtest1 wg set $wg1 peer "$pub2" \
+	    endpoint ${endpoint2}:12345 allowed-ips ${tunnel2}/128,${testnet}
 	atf_check -s exit:0 \
-	    jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up debug
+	    jexec wgtest1 ifconfig $wg1 inet6 ${tunnel1}/64 up
 
 	atf_check -s exit:0 -o ignore \
-	    jexec wgtest2 awg set $wg2 peer "$pub1" \
-	    endpoint ${endpoint1}:12345 allowed-ips ${tunnel1}/32
-	atf_check -s exit:0 -o ignore \
-        jexec wgtest2 awg set $wg2 $awg_cfg
+	    jexec wgtest2 wg set $wg2 peer "$pub1" \
+	    endpoint ${endpoint1}:12345 allowed-ips ${tunnel1}/128,${testnet}
 	atf_check -s exit:0 \
-	    jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up debug
+	    jexec wgtest2 ifconfig $wg2 inet6 ${tunnel2}/64 up
+
+	atf_check -s exit:0 jexec wgtest1 ifconfig $wg1 inet ${testlocal}/32
+	atf_check -s exit:0 jexec wgtest2 ifconfig $wg2 inet ${testremote}/32
+
+	# Generous timeout since the handshake takes some time.
+	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 -t 5 "$tunnel2"
+
+	# Setup our IPv6 endpoint and routing
+	atf_check -s exit:0 -o ignore \
+		jexec wgtest1 route add -inet ${testnet} -inet6 "$tunnel2"
+	atf_check -s exit:0 -o ignore \
+		jexec wgtest2 route add -inet ${testnet} -inet6 "$tunnel1"
+	# Now ping an address on the other side
+	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 -t 3 ${testremote}
+}
+
+wg_basic_crossaf_cleanup()
+{
+	vnet_cleanup
+}
+
+atf_test_case "wg_basic_netmap" "cleanup"
+wg_basic_netmap_head()
+{
+	atf_set descr 'Create a wg(4) tunnel over an epair and pass traffic between jails with netmap'
+	atf_set require.user root
+}
+
+wg_basic_netmap_body()
+{
+	local epair pri1 pri2 pub1 pub2 wg1 wg2
+        local endpoint1 endpoint2 tunnel1 tunnel2 tunnel3 tunnel4
+	local pid status
+
+	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
+	kldload -n netmap || atf_skip "This test requires netmap and could not load it"
+
+	pri1=$(wg genkey)
+	pri2=$(wg genkey)
+
+	endpoint1=192.168.2.1
+	endpoint2=192.168.2.2
+	tunnel1=192.168.3.1
+	tunnel2=192.168.3.2
+	tunnel3=192.168.3.3
+	tunnel4=192.168.3.4
+
+	epair=$(vnet_mkepair)
+
+	vnet_init
+
+	vnet_mkjail wgtest1 ${epair}a
+	vnet_mkjail wgtest2 ${epair}b
+
+    awg_cfg=$(awg_config)
+
+	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
+	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
+
+	wg1=$(jexec wgtest1 ifconfig wg create)
+	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
+	    private-key /dev/stdin
+	pub1=$(jexec wgtest1 wg show $wg1 public-key)
+	wg2=$(jexec wgtest2 ifconfig wg create)
+	echo "$pri2" | jexec wgtest2 wg set $wg2 listen-port 12345 \
+	    private-key /dev/stdin
+	pub2=$(jexec wgtest2 wg show $wg2 public-key)
+
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest1 wg set $wg1 peer "$pub2" \
+	    endpoint ${endpoint2}:12345 allowed-ips ${tunnel2}/32,${tunnel4}/32
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest1 awg set $wg1 $awg_cfg
+	atf_check -s exit:0 \
+	    jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up
+
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest2 wg set $wg2 peer "$pub1" \
+	    endpoint ${endpoint1}:12345 allowed-ips ${tunnel1}/32,${tunnel3}/32
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest2 awg set $wg2 $awg_cfg
+	atf_check -s exit:0 \
+	    jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up
+
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest1 sysctl net.inet.ip.forwarding=1
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest2 sysctl net.inet.ip.forwarding=1
+
+	jexec wgtest1 $(atf_get_srcdir)/bridge -w 0 -i netmap:wg0 -i netmap:wg0^ &
+	pid=$!
 
 	# Generous timeout since the handshake takes some time.
 	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 -t 5 $tunnel2
 	atf_check -s exit:0 -o ignore jexec wgtest2 ping -c 1 $tunnel1
+
+	# Verify that we cannot ping non-existent tunnel addresses.  In general
+	# the remote side should respond with an ICMP message.
+	atf_check -s exit:2 -o ignore jexec wgtest1 ping -c 1 -t 2 $tunnel4
+	atf_check -s exit:2 -o ignore jexec wgtest2 ping -c 1 -t 2 $tunnel3
+
+	# Make sure that the bridge is still functional.
+	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 $tunnel2
+	atf_check -s exit:0 -o ignore jexec wgtest2 ping -c 1 $tunnel1
+
+	atf_check -s exit:0 kill -TERM $pid
+	wait $pid
+	status=$?
+
+	# Make sure that SIGTERM was received and handled.
+	atf_check_equal $status 143
 }
 
-amneziawg_go_cleanup()
+wg_basic_netmap_cleanup()
+{
+	vnet_cleanup
+}
+
+# The kernel is expected to silently ignore any attempt to add a peer with a
+# public key identical to the host's.
+atf_test_case "wg_key_peerdev_shared" "cleanup"
+wg_key_peerdev_shared_head()
+{
+	atf_set descr 'Create a wg(4) interface with a shared pubkey between device and a peer'
+	atf_set require.user root
+}
+
+wg_key_peerdev_shared_body()
+{
+	local epair pri1 pub1 wg1
+        local endpoint1 tunnel1
+
+	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
+
+	pri1=$(wg genkey)
+
+	endpoint1=192.168.2.1
+	tunnel1=169.254.0.1
+
+	vnet_mkjail wgtest1
+
+    awg_cfg=$(awg_config)
+
+	wg1=$(jexec wgtest1 ifconfig wg create)
+	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
+	    private-key /dev/stdin
+	pub1=$(jexec wgtest1 wg show $wg1 public-key)
+
+	atf_check -s exit:0 \
+	    jexec wgtest1 wg set ${wg1} peer "${pub1}" \
+	    allowed-ips "${tunnel1}/32"
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest1 awg set $wg1 $awg_cfg
+
+	atf_check -o empty jexec wgtest1 wg show ${wg1} peers
+}
+
+wg_key_peerdev_shared_cleanup()
+{
+	vnet_cleanup
+}
+
+# When a wg(8) interface has a private key reassigned that corresponds to the
+# public key already on a peer, the kernel is expected to deconfigure the peer
+# to resolve the conflict.
+atf_test_case "wg_key_peerdev_makeshared" "cleanup"
+wg_key_peerdev_makeshared_head()
+{
+	atf_set descr 'Create a wg(4) interface and assign peer key to device'
+	atf_set require.progs wg
+}
+
+wg_key_peerdev_makeshared_body()
+{
+	local epair pri1 pub1 pri2 wg1 wg2
+        local endpoint1 tunnel1
+
+	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
+
+	pri1=$(wg genkey)
+	pri2=$(wg genkey)
+
+	endpoint1=192.168.2.1
+	tunnel1=169.254.0.1
+
+	vnet_mkjail wgtest1
+
+    awg_cfg=$(awg_config)
+
+	wg1=$(jexec wgtest1 ifconfig wg create)
+	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
+	    private-key /dev/stdin
+	pub1=$(jexec wgtest1 wg show $wg1 public-key)
+	wg2=$(jexec wgtest1 ifconfig wg create)
+	echo "$pri2" | jexec wgtest1 wg set $wg2 listen-port 12345 \
+	    private-key /dev/stdin
+
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest1 wg set ${wg2} peer "${pub1}" \
+	    allowed-ips "${tunnel1}/32"
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest1 awg set $wg2 $awg_cfg
+
+	atf_check -o not-empty jexec wgtest1 wg show ${wg2} peers
+
+	jexec wgtest1 sh -c "echo '${pri1}' > pri1"
+
+	atf_check -s exit:0 \
+	   jexec wgtest1 wg set ${wg2} private-key pri1
+
+	atf_check -o empty jexec wgtest1 wg show ${wg2} peers
+}
+
+wg_key_peerdev_makeshared_cleanup()
+{
+	vnet_cleanup
+}
+
+# The kernel is expected to create the wg socket in the jail context that the
+# wg interface was created in, even if the interface is moved to a different
+# vnet.
+atf_test_case "wg_vnet_parent_routing" "cleanup"
+wg_vnet_parent_routing_head()
+{
+	atf_set descr 'Create a wg(4) tunnel without epairs and pass traffic between jails'
+	atf_set require.user root
+}
+
+wg_vnet_parent_routing_body()
+{
+	local pri1 pri2 pub1 pub2 wg1 wg2
+        local tunnel1 tunnel2
+
+	kldload -n if_wg
+
+	pri1=$(wg genkey)
+	pri2=$(wg genkey)
+
+	tunnel1=169.254.0.1
+	tunnel2=169.254.0.2
+
+	vnet_init
+
+	wg1=$(ifconfig wg create)
+	wg2=$(ifconfig wg create)
+
+	vnet_mkjail wgtest1 ${wg1}
+	vnet_mkjail wgtest2 ${wg2}
+
+    awg_cfg=$(awg_config)
+
+	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
+	    private-key /dev/stdin
+	pub1=$(jexec wgtest1 wg show $wg1 public-key)
+	echo "$pri2" | jexec wgtest2 wg set $wg2 listen-port 12346 \
+	    private-key /dev/stdin
+	pub2=$(jexec wgtest2 wg show $wg2 public-key)
+
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest1 wg set $wg1 peer "$pub2" \
+	    endpoint 127.0.0.1:12346 allowed-ips ${tunnel2}/32
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest1 awg set $wg1 $awg_cfg
+	atf_check -s exit:0 \
+	    jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up
+
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest2 wg set $wg2 peer "$pub1" \
+	    endpoint 127.0.0.1:12345 allowed-ips ${tunnel1}/32
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest2 awg set $wg2 $awg_cfg
+	atf_check -s exit:0 \
+	    jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up
+
+	# Sanity check ICMP counters; should clearly be nothing on these new
+	# jails.  We'll check them as we go to ensure that the ICMP packets
+	# generated really are being handled by the jails' vnets.
+	atf_check -o not-match:"histogram" jexec wgtest1 netstat -s -p icmp
+	atf_check -o not-match:"histogram" jexec wgtest2 netstat -s -p icmp
+
+	# Generous timeout since the handshake takes some time.
+	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 -t 5 $tunnel2
+	atf_check -o match:"echo reply: 1" jexec wgtest1 netstat -s -p icmp
+	atf_check -o match:"echo: 1" jexec wgtest2 netstat -s -p icmp
+
+	atf_check -s exit:0 -o ignore jexec wgtest2 ping -c 1 $tunnel1
+	atf_check -o match:"echo reply: 1" jexec wgtest2 netstat -s -p icmp
+	atf_check -o match:"echo: 1" jexec wgtest1 netstat -s -p icmp
+}
+
+wg_vnet_parent_routing_cleanup()
+{
+	vnet_cleanup
+}
+
+# The kernel should now allow removing a single allowed-ip without having to
+# replace the whole list.  We can't really test the atomicity of it all that
+# easily, but we'll trust that it worked right if just that addr/mask is gone.
+atf_test_case "wg_allowedip_incremental" "cleanup"
+wg_allowedip_incremental_head()
+{
+	atf_set descr "Add/remove allowed-ips from a peer with the +/- incremental syntax"
+	atf_set require.user root
+}
+
+wg_allowedip_incremental_body()
+{
+	local pri1 pri2 pub1 pub2 wg1
+	local tunnel1 tunnel2 tunnel3
+
+	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
+
+	pri1=$(wg genkey)
+	pri2=$(wg genkey)
+	pub2=$(echo "$pri2" | wg pubkey)
+
+	tunnel1=169.254.0.1
+	tunnel2=169.254.0.2
+	tunnel3=169.254.0.3
+
+	vnet_mkjail wgtest1
+
+    awg_cfg=$(awg_config)
+
+	wg1=$(jexec wgtest1 ifconfig wg create)
+	echo "$pri1" | jexec wgtest1 wg set $wg1 private-key /dev/stdin
+	pub1=$(jexec wgtest1 wg show $wg1 public-key)
+
+	atf_check -s exit:0 \
+	    jexec wgtest1 wg set $wg1 peer $pub2 \
+	    allowed-ips "${tunnel1}/32,${tunnel2}/32"
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest1 awg set $wg1 $awg_cfg
+
+	atf_check -o save:wg.allowed jexec wgtest1 wg show $wg1 allowed-ips
+	atf_check grep -q "${tunnel1}/32" wg.allowed
+	atf_check grep -q "${tunnel2}/32" wg.allowed
+
+	atf_check -s exit:0 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
+	    allowed-ips "-${tunnel2}/32"
+
+	atf_check -o save:wg-2.allowed jexec wgtest1 wg show $wg1 allowed-ips
+	atf_check grep -q "${tunnel1}/32" wg-2.allowed
+	atf_check -s not-exit:0 grep -q "${tunnel2}/32" wg-2.allowed
+
+	atf_check -s exit:0 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
+	    allowed-ips "+${tunnel2}/32"
+
+	atf_check -o save:wg-3.allowed jexec wgtest1 wg show $wg1 allowed-ips
+	atf_check grep -q "${tunnel1}/32" wg-3.allowed
+	atf_check grep -q "${tunnel2}/32" wg-3.allowed
+
+	# Now attempt to add the address yet again to confirm that it's not
+	# harmful.
+	atf_check -s exit:0 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
+	    allowed-ips "+${tunnel2}/32"
+
+	atf_check -o save:wg-4.allowed -x \
+	    "jexec wgtest1 awg show $wg1 allowed-ips | cut -f2 | tr ' ' '\n'"
+	atf_check -o match:"2 wg-4.allowed$" wc -l wg-4.allowed
+
+	# Finally, let's try removing an address that we never had at all and
+	# confirm that we still have our two addresses.
+	atf_check -s exit:0 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
+	    allowed-ips "-${tunnel3}/32"
+
+	atf_check -o save:wg-5.allowed -x \
+	    "jexec wgtest1 awg show $wg1 allowed-ips | cut -f2 | tr ' ' '\n'"
+	atf_check cmp -s wg-4.allowed wg-5.allowed
+}
+
+wg_allowedip_incremental_cleanup()
+{
+	vnet_cleanup
+}
+
+atf_test_case "wg_allowedip_incremental_inet6" "cleanup"
+wg_allowedip_incremental_inet6_head()
+{
+	atf_set descr "Add/remove IPv6 allowed-ips from a peer with the +/- incremental syntax"
+	atf_set require.user root
+}
+
+wg_allowedip_incremental_inet6_body()
+{
+	local pri1 pri2 pub1 pub2 wg1
+	local tunnel1 tunnel2
+
+	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
+
+	pri1=$(wg genkey)
+	pri2=$(wg genkey)
+	pub2=$(echo "$pri2" | wg pubkey)
+
+	tunnel1=2001:db8:1::1
+	tunnel2=2001:db8:1::2
+
+	vnet_mkjail wgtest1
+
+    awg_cfg=$(awg_config)
+
+	wg1=$(jexec wgtest1 ifconfig wg create)
+	echo "$pri1" | jexec wgtest1 wg set $wg1 private-key /dev/stdin
+	pub1=$(jexec wgtest1 wg show $wg1 public-key)
+
+	atf_check -s exit:0 \
+	    jexec wgtest1 wg set $wg1 peer $pub2 \
+	    allowed-ips "${tunnel1}/128"
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest1 awg set $wg1 $awg_cfg
+	atf_check -o save:wg.allowed jexec wgtest1 wg show $wg1 allowed-ips
+	atf_check grep -q "${tunnel1}/128" wg.allowed
+
+	atf_check -s exit:0 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
+	    allowed-ips "+${tunnel2}/128"
+	atf_check -o save:wg-2.allowed jexec wgtest1 wg show $wg1 allowed-ips
+	atf_check grep -q "${tunnel1}/128" wg-2.allowed
+	atf_check grep -q "${tunnel2}/128" wg-2.allowed
+
+	atf_check -s exit:0 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
+	    allowed-ips "-${tunnel1}/128"
+	atf_check -o save:wg-3.allowed jexec wgtest1 wg show $wg1 allowed-ips
+	atf_check -s not-exit:0 grep -q "${tunnel1}/128" wg-3.allowed
+	atf_check grep -q "${tunnel2}/128" wg-3.allowed
+}
+
+wg_allowedip_incremental_inet6_cleanup()
+{
+	vnet_cleanup
+}
+
+
+atf_test_case "wg_allowedip_incremental_stealing" "cleanup"
+wg_allowedip_incremental_stealing_head()
+{
+	atf_set descr "Add/remove allowed-ips from a peer with the +/- incremental syntax to steal"
+	atf_set require.user root
+}
+
+wg_allowedip_incremental_stealing_body()
+{
+	local pri1 pri2 pri3 pub1 pub2 pub3 wg1
+	local regex2 regex3
+	local tunnel1 tunnel2
+
+	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
+
+	pri1=$(wg genkey)
+	pri2=$(wg genkey)
+	pri3=$(wg genkey)
+	pub2=$(echo "$pri2" | wg pubkey)
+	pub3=$(echo "$pri3" | wg pubkey)
+
+	regex2=$(echo "$pub2" | sed -e 's/[+]/[+]/g')
+	regex3=$(echo "$pub3" | sed -e 's/[+]/[+]/g')
+
+	tunnel1=169.254.0.1
+	tunnel2=169.254.0.2
+	tunnel3=169.254.0.3
+
+	vnet_mkjail wgtest1
+
+    awg_cfg=$(awg_config)
+
+	wg1=$(jexec wgtest1 ifconfig wg create)
+	echo "$pri1" | jexec wgtest1 wg set $wg1 private-key /dev/stdin
+	pub1=$(jexec wgtest1 wg show $wg1 public-key)
+
+	atf_check -s exit:0 \
+	    jexec wgtest1 wg set $wg1 peer $pub2 \
+	    allowed-ips "${tunnel1}/32,${tunnel2}/32"
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest1 awg set $wg1 $awg_cfg
+
+	atf_check -s exit:0 \
+	    jexec wgtest1 wg set $wg1 peer $pub3 \
+	    allowed-ips "${tunnel3}/32"
+
+	# First, confirm that the negative syntax doesn't do anything because
+	# we have the wrong peer.
+	atf_check -s exit:0 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
+	    allowed-ips "-${tunnel3}/32"
+
+	atf_check -o save:wg.allowed jexec wgtest1 wg show $wg1 allowed-ips
+	atf_check grep -Eq "^${regex3}.+${tunnel3}/32" wg.allowed
+
+	# Next, steal it with an incremental move and check that it moved.
+	atf_check -s exit:0 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
+	    allowed-ips "+${tunnel3}/32"
+
+	atf_check -o save:wg-2.allowed jexec wgtest1 wg show $wg1 allowed-ips
+
+	atf_check grep -Eq "^${regex2}.+${tunnel3}/32" wg-2.allowed
+	atf_check grep -Evq "^${regex3}.+${tunnel3}/32" wg-2.allowed
+}
+
+wg_allowedip_incremental_stealing_cleanup()
 {
 	vnet_cleanup
 }
 
 atf_init_test_cases()
 {
-	atf_add_test_case "awg_configuration"
-	atf_add_test_case "wide_range_parameters"
-	atf_add_test_case "amneziawg_go"
+	atf_add_test_case "wg_basic"
+	atf_add_test_case "wg_basic_crossaf"
+	atf_add_test_case "wg_basic_netmap"
+	atf_add_test_case "wg_key_peerdev_shared"
+	atf_add_test_case "wg_key_peerdev_makeshared"
+	atf_add_test_case "wg_vnet_parent_routing"
+	atf_add_test_case "wg_allowedip_incremental"
+	atf_add_test_case "wg_allowedip_incremental_inet6"
+	atf_add_test_case "wg_allowedip_incremental_stealing"
 }

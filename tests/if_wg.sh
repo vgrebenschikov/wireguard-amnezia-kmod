@@ -29,34 +29,6 @@
 
 . "$(atf_get_srcdir)/vnet.subr"
 
-awg_config() {
-    for i in 1 2 3 4; do
-        jc=$(jot -r 1 3 10)
-        jmin=$(jot -r 1 50 100)
-        jmax=$(jot -r 1 $jmin 1000)
-
-        s1=$(jot -r 1 15 1132)
-        s2=$(jot -r 1 15 1188)
-        s3=$(jot -r 1 15 100)
-        s4=$(jot -r 1 15 60)
-
-        h1=$(jot -r 1 5 4294967295)
-        h2=$(jot -r 1 5 4294967295)
-        h3=$(jot -r 1 5 4294967295)
-        h4=$(jot -r 1 5 4294967295)
-
-        if [ $(($s1 + 56)) -ne $s2 ] && \
-           [ $(echo -e "$h1\n$h2\n$h3\n$h4" | sort -u | wc -l) -eq 4 ]; then
-            break
-        fi
-    done
-
-    echo \
-        jc $jc jmin $jmin jmax $jmax \
-        s1 $s1 s2 $s2 s3 $s3 s4 $s4 \
-        h1 $h1 h2 $h2 h3 $h3 h4 $h4
-}
-
 atf_test_case "wg_basic" "cleanup"
 wg_basic_head()
 {
@@ -79,6 +51,9 @@ wg_basic_body()
 	tunnel1=169.254.0.1
 	tunnel2=169.254.0.2
 
+    jail -r wgtest1 2> /dev/null || true
+    jail -r wgtest2 2> /dev/null || true
+
 	epair=$(vnet_mkepair)
 
 	vnet_init
@@ -86,17 +61,15 @@ wg_basic_body()
 	vnet_mkjail wgtest1 ${epair}a
 	vnet_mkjail wgtest2 ${epair}b
 
-    awg_cfg=$(awg_config)
-
 	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
 	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
 
-	wg1=$(jexec wgtest1 ifconfig wg create)
+	wg1=$(jexec wgtest1 ifconfig wg create name wg1)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
 	    private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
 
-	wg2=$(jexec wgtest2 ifconfig wg create)
+	wg2=$(jexec wgtest2 ifconfig wg create name wg2)
 	echo "$pri2" | jexec wgtest2 wg set $wg2 listen-port 12345 \
 	    private-key /dev/stdin
 	pub2=$(jexec wgtest2 wg show $wg2 public-key)
@@ -104,16 +77,12 @@ wg_basic_body()
 	atf_check -s exit:0 -o ignore \
 	    jexec wgtest1 wg set $wg1 peer "$pub2" \
 	    endpoint ${endpoint2}:12345 allowed-ips ${tunnel2}/32
-	atf_check -s exit:0 -o ignore \
-        jexec wgtest1 awg set $wg1 $awg_cfg
 	atf_check -s exit:0 \
 	    jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up debug
 
 	atf_check -s exit:0 -o ignore \
 	    jexec wgtest2 wg set $wg2 peer "$pub1" \
 	    endpoint ${endpoint1}:12345 allowed-ips ${tunnel1}/32
-	atf_check -s exit:0 -o ignore \
-        jexec wgtest2 awg set $wg2 $awg_cfg
 	atf_check -s exit:0 \
 	    jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up debug
 
@@ -161,8 +130,6 @@ wg_basic_crossaf_body()
 	vnet_mkjail wgtest1 ${epair}a
 	vnet_mkjail wgtest2 ${epair}b
 
-    awg_cfg=$(awg_config)
-
 	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
 	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
 
@@ -170,13 +137,11 @@ wg_basic_crossaf_body()
 	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
 	    private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
-    jexec wgtest1 awg set $wg1 $awg_cfg
 
 	wg2=$(jexec wgtest2 ifconfig wg create)
 	echo "$pri2" | jexec wgtest2 wg set $wg2 listen-port 12345 \
 	    private-key /dev/stdin
 	pub2=$(jexec wgtest2 wg show $wg2 public-key)
-    jexec wgtest2 awg set $wg2 $awg_cfg
 
 	atf_check -s exit:0 -o ignore \
 	    jexec wgtest1 wg set $wg1 peer "$pub2" \
@@ -243,8 +208,6 @@ wg_basic_netmap_body()
 	vnet_mkjail wgtest1 ${epair}a
 	vnet_mkjail wgtest2 ${epair}b
 
-    awg_cfg=$(awg_config)
-
 	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
 	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
 
@@ -260,16 +223,12 @@ wg_basic_netmap_body()
 	atf_check -s exit:0 -o ignore \
 	    jexec wgtest1 wg set $wg1 peer "$pub2" \
 	    endpoint ${endpoint2}:12345 allowed-ips ${tunnel2}/32,${tunnel4}/32
-	atf_check -s exit:0 -o ignore \
-	    jexec wgtest1 awg set $wg1 $awg_cfg
 	atf_check -s exit:0 \
 	    jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up
 
 	atf_check -s exit:0 -o ignore \
 	    jexec wgtest2 wg set $wg2 peer "$pub1" \
 	    endpoint ${endpoint1}:12345 allowed-ips ${tunnel1}/32,${tunnel3}/32
-	atf_check -s exit:0 -o ignore \
-	    jexec wgtest2 awg set $wg2 $awg_cfg
 	atf_check -s exit:0 \
 	    jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up
 
@@ -330,8 +289,6 @@ wg_key_peerdev_shared_body()
 
 	vnet_mkjail wgtest1
 
-    awg_cfg=$(awg_config)
-
 	wg1=$(jexec wgtest1 ifconfig wg create)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
 	    private-key /dev/stdin
@@ -340,8 +297,6 @@ wg_key_peerdev_shared_body()
 	atf_check -s exit:0 \
 	    jexec wgtest1 wg set ${wg1} peer "${pub1}" \
 	    allowed-ips "${tunnel1}/32"
-	atf_check -s exit:0 -o ignore \
-	    jexec wgtest1 awg set $wg1 $awg_cfg
 
 	atf_check -o empty jexec wgtest1 wg show ${wg1} peers
 }
@@ -376,8 +331,6 @@ wg_key_peerdev_makeshared_body()
 
 	vnet_mkjail wgtest1
 
-    awg_cfg=$(awg_config)
-
 	wg1=$(jexec wgtest1 ifconfig wg create)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
 	    private-key /dev/stdin
@@ -389,8 +342,6 @@ wg_key_peerdev_makeshared_body()
 	atf_check -s exit:0 -o ignore \
 	    jexec wgtest1 wg set ${wg2} peer "${pub1}" \
 	    allowed-ips "${tunnel1}/32"
-	atf_check -s exit:0 -o ignore \
-	    jexec wgtest1 awg set $wg2 $awg_cfg
 
 	atf_check -o not-empty jexec wgtest1 wg show ${wg2} peers
 
@@ -438,8 +389,6 @@ wg_vnet_parent_routing_body()
 	vnet_mkjail wgtest1 ${wg1}
 	vnet_mkjail wgtest2 ${wg2}
 
-    awg_cfg=$(awg_config)
-
 	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
 	    private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
@@ -450,16 +399,12 @@ wg_vnet_parent_routing_body()
 	atf_check -s exit:0 -o ignore \
 	    jexec wgtest1 wg set $wg1 peer "$pub2" \
 	    endpoint 127.0.0.1:12346 allowed-ips ${tunnel2}/32
-	atf_check -s exit:0 -o ignore \
-	    jexec wgtest1 awg set $wg1 $awg_cfg
 	atf_check -s exit:0 \
 	    jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up
 
 	atf_check -s exit:0 -o ignore \
 	    jexec wgtest2 wg set $wg2 peer "$pub1" \
 	    endpoint 127.0.0.1:12345 allowed-ips ${tunnel1}/32
-	atf_check -s exit:0 -o ignore \
-	    jexec wgtest2 awg set $wg2 $awg_cfg
 	atf_check -s exit:0 \
 	    jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up
 
@@ -511,8 +456,6 @@ wg_allowedip_incremental_body()
 
 	vnet_mkjail wgtest1
 
-    awg_cfg=$(awg_config)
-
 	wg1=$(jexec wgtest1 ifconfig wg create)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
@@ -520,15 +463,13 @@ wg_allowedip_incremental_body()
 	atf_check -s exit:0 \
 	    jexec wgtest1 wg set $wg1 peer $pub2 \
 	    allowed-ips "${tunnel1}/32,${tunnel2}/32"
-	atf_check -s exit:0 -o ignore \
-	    jexec wgtest1 awg set $wg1 $awg_cfg
 
 	atf_check -o save:wg.allowed jexec wgtest1 wg show $wg1 allowed-ips
 	atf_check grep -q "${tunnel1}/32" wg.allowed
 	atf_check grep -q "${tunnel2}/32" wg.allowed
 
 	atf_check -s exit:0 \
-	    jexec wgtest1 wg set $wg1 peer $pub2 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
 	    allowed-ips "-${tunnel2}/32"
 
 	atf_check -o save:wg-2.allowed jexec wgtest1 wg show $wg1 allowed-ips
@@ -536,7 +477,7 @@ wg_allowedip_incremental_body()
 	atf_check -s not-exit:0 grep -q "${tunnel2}/32" wg-2.allowed
 
 	atf_check -s exit:0 \
-	    jexec wgtest1 wg set $wg1 peer $pub2 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
 	    allowed-ips "+${tunnel2}/32"
 
 	atf_check -o save:wg-3.allowed jexec wgtest1 wg show $wg1 allowed-ips
@@ -546,21 +487,21 @@ wg_allowedip_incremental_body()
 	# Now attempt to add the address yet again to confirm that it's not
 	# harmful.
 	atf_check -s exit:0 \
-	    jexec wgtest1 wg set $wg1 peer $pub2 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
 	    allowed-ips "+${tunnel2}/32"
 
 	atf_check -o save:wg-4.allowed -x \
-	    "jexec wgtest1 wg show $wg1 allowed-ips | cut -f2 | tr ' ' '\n'"
+	    "jexec wgtest1 awg show $wg1 allowed-ips | cut -f2 | tr ' ' '\n'"
 	atf_check -o match:"2 wg-4.allowed$" wc -l wg-4.allowed
 
 	# Finally, let's try removing an address that we never had at all and
 	# confirm that we still have our two addresses.
 	atf_check -s exit:0 \
-	    jexec wgtest1 wg set $wg1 peer $pub2 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
 	    allowed-ips "-${tunnel3}/32"
 
 	atf_check -o save:wg-5.allowed -x \
-	    "jexec wgtest1 wg show $wg1 allowed-ips | cut -f2 | tr ' ' '\n'"
+	    "jexec wgtest1 awg show $wg1 allowed-ips | cut -f2 | tr ' ' '\n'"
 	atf_check cmp -s wg-4.allowed wg-5.allowed
 }
 
@@ -592,8 +533,6 @@ wg_allowedip_incremental_inet6_body()
 
 	vnet_mkjail wgtest1
 
-    awg_cfg=$(awg_config)
-
 	wg1=$(jexec wgtest1 ifconfig wg create)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
@@ -601,20 +540,18 @@ wg_allowedip_incremental_inet6_body()
 	atf_check -s exit:0 \
 	    jexec wgtest1 wg set $wg1 peer $pub2 \
 	    allowed-ips "${tunnel1}/128"
-	atf_check -s exit:0 -o ignore \
-	    jexec wgtest1 awg set $wg1 $awg_cfg
 	atf_check -o save:wg.allowed jexec wgtest1 wg show $wg1 allowed-ips
 	atf_check grep -q "${tunnel1}/128" wg.allowed
 
 	atf_check -s exit:0 \
-	    jexec wgtest1 wg set $wg1 peer $pub2 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
 	    allowed-ips "+${tunnel2}/128"
 	atf_check -o save:wg-2.allowed jexec wgtest1 wg show $wg1 allowed-ips
 	atf_check grep -q "${tunnel1}/128" wg-2.allowed
 	atf_check grep -q "${tunnel2}/128" wg-2.allowed
 
 	atf_check -s exit:0 \
-	    jexec wgtest1 wg set $wg1 peer $pub2 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
 	    allowed-ips "-${tunnel1}/128"
 	atf_check -o save:wg-3.allowed jexec wgtest1 wg show $wg1 allowed-ips
 	atf_check -s not-exit:0 grep -q "${tunnel1}/128" wg-3.allowed
@@ -657,8 +594,6 @@ wg_allowedip_incremental_stealing_body()
 
 	vnet_mkjail wgtest1
 
-    awg_cfg=$(awg_config)
-
 	wg1=$(jexec wgtest1 ifconfig wg create)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
@@ -666,8 +601,6 @@ wg_allowedip_incremental_stealing_body()
 	atf_check -s exit:0 \
 	    jexec wgtest1 wg set $wg1 peer $pub2 \
 	    allowed-ips "${tunnel1}/32,${tunnel2}/32"
-	atf_check -s exit:0 -o ignore \
-	    jexec wgtest1 awg set $wg1 $awg_cfg
 
 	atf_check -s exit:0 \
 	    jexec wgtest1 wg set $wg1 peer $pub3 \
@@ -676,7 +609,7 @@ wg_allowedip_incremental_stealing_body()
 	# First, confirm that the negative syntax doesn't do anything because
 	# we have the wrong peer.
 	atf_check -s exit:0 \
-	    jexec wgtest1 wg set $wg1 peer $pub2 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
 	    allowed-ips "-${tunnel3}/32"
 
 	atf_check -o save:wg.allowed jexec wgtest1 wg show $wg1 allowed-ips
@@ -684,7 +617,7 @@ wg_allowedip_incremental_stealing_body()
 
 	# Next, steal it with an incremental move and check that it moved.
 	atf_check -s exit:0 \
-	    jexec wgtest1 wg set $wg1 peer $pub2 \
+	    jexec wgtest1 awg set $wg1 peer $pub2 \
 	    allowed-ips "+${tunnel3}/32"
 
 	atf_check -o save:wg-2.allowed jexec wgtest1 wg show $wg1 allowed-ips

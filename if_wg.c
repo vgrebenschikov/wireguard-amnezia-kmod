@@ -2170,71 +2170,62 @@ wg_queue_dequeue_parallel(struct wg_queue *parallel)
 	return (pkt);
 }
 
-static struct mbuf *
-wg_skip_junk_input(struct mbuf *m, struct wg_softc *sc)
+static uint32_t
+wg_match_pkt_skipping_junk(struct mbuf **mptr, size_t junk_size, uint32_t pkt_type)
 {
-	size_t assumed_offset = 0;
-	uint32_t assumed_type = 0;
+	size_t req_size = junk_size + sizeof(uint32_t);
 
-	/* s1 == 0 means no junk before initiation packet - check by size */
-	if (!sc->sc_socket.so_init_packet_junk_size &&
-	    m->m_pkthdr.len == sizeof(struct wg_pkt_initiation))
-		return m;
+	/* required size is more then total packet size */
+	if (req_size >= (*mptr)->m_pkthdr.len)
+		return 0;
 
-	/* s2 == 0 means no junk before response packet - check by size */
-	if (!sc->sc_socket.so_response_packet_junk_size &&
-	    m->m_pkthdr.len == sizeof(struct wg_pkt_response))
-		return m;
-
-	/* s3 == 0 means no junk before cookie packet - check by size */
-	if (!sc->sc_socket.so_cookie_packet_junk_size &&
-	    m->m_pkthdr.len == sizeof(struct wg_pkt_cookie))
-		return m;
-
-	/* Check if this is an initiation packet with junk */
-	if (m->m_pkthdr.len == sizeof(struct wg_pkt_initiation) +
-	    sc->sc_socket.so_init_packet_junk_size) {
-		assumed_offset = sc->sc_socket.so_init_packet_junk_size;
-		assumed_type = WG_PKT_INITIATION(sc);
-	}
-	/* Check if this is a response packet with junk */
-	else if (m->m_pkthdr.len == sizeof(struct wg_pkt_response) +
-	    sc->sc_socket.so_response_packet_junk_size) {
-		assumed_offset = sc->sc_socket.so_response_packet_junk_size;
-		assumed_type = WG_PKT_RESPONSE(sc);
-	}
-	/* Check if this is a cookie packet with junk */
-	else if (m->m_pkthdr.len == sizeof(struct wg_pkt_cookie) +
-	    sc->sc_socket.so_cookie_packet_junk_size) {
-		assumed_offset = sc->sc_socket.so_cookie_packet_junk_size;
-		assumed_type = WG_PKT_COOKIE(sc);
-	}
-	/* Check if this is a data packet with junk */
-	else if (m->m_pkthdr.len >= sizeof(struct wg_pkt_data) +
-	    sc->sc_socket.so_transport_packet_junk_size) {
-		assumed_offset = sc->sc_socket.so_transport_packet_junk_size;
-		assumed_type = WG_PKT_DATA(sc);
-	}
-
-	if (assumed_offset == 0)
-		return m;
-
-	if (m->m_len < assumed_offset + sizeof(uint32_t)) {
+	/* if not whole packet header in mbuf, pullup to required size */
+	if ((*mptr)->m_len < req_size) {
 		/* pullup only if not whole packet header in mbuf */
-		m = m_pullup(m, assumed_offset + sizeof(uint32_t));
-		if (m == NULL)
-			return m;
+		*mptr = m_pullup(*mptr, req_size);
+		if (*mptr == NULL)
+			return 0;
 	}
 
-	/* verify packet type */
-	if (*(uint32_t *)mtodo(m, assumed_offset) != assumed_type) {
-		DPRINTF(sc, "Amnezia: wrong type after skip junk in handshake\n");
-		return m;
+	/* check packet type */
+	if (*(uint32_t *)mtodo(*mptr, junk_size) != pkt_type) {
+        return 0;
 	}
 
-	m_adj(m, assumed_offset);
+	/* skip junk only once we identified packet type */
+	if (junk_size > 0)
+		m_adj(*mptr, junk_size);
 
-	return m;
+	return pkt_type;
+}
+
+
+static uint32_t
+wg_match_input_skipping_junk(struct mbuf **mptr, struct wg_softc *sc)
+{
+	uint32_t matched = 0;
+
+    /* Check if this is a initiation packet with junk */
+	if (*mptr && !matched) {
+		matched = wg_match_pkt_skipping_junk(mptr, sc->sc_socket.so_init_packet_junk_size, WG_PKT_INITIATION(sc));
+	}
+
+	/* Check if this is a response packet with junk */
+	if (*mptr && !matched) {
+		matched = wg_match_pkt_skipping_junk(mptr, sc->sc_socket.so_response_packet_junk_size, WG_PKT_RESPONSE(sc));
+	}
+
+	/* Check if this is a cookie packet with junk */
+	if (*mptr && !matched) {
+		matched = wg_match_pkt_skipping_junk(mptr, sc->sc_socket.so_cookie_packet_junk_size, WG_PKT_COOKIE(sc));
+	}
+
+	/* Check if this is a data packet with junk */
+	if (*mptr && !matched) {
+		matched = wg_match_pkt_skipping_junk(mptr, sc->sc_socket.so_transport_packet_junk_size, WG_PKT_DATA(sc));
+	}
+
+	return matched;
 }
 
 static bool
@@ -2267,13 +2258,8 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 	m_adj(m, offset + sizeof(struct udphdr));
 
 	/* Check if this packet has junk to skip, doing m_pullup if needed*/
-	if ((m = wg_skip_junk_input(m, sc)) == NULL) {
-		if_inc_counter(sc->sc_ifp, IFCOUNTER_IQDROPS, 1);
-		return true;
-	}
-
-	/* Pullup enough to read packet type */
-	if ((m = m_pullup(m, sizeof(uint32_t))) == NULL) {
+	uint32_t pkt_type = wg_match_input_skipping_junk(&m, sc);
+	if (!pkt_type || m == NULL) {
 		if_inc_counter(sc->sc_ifp, IFCOUNTER_IQDROPS, 1);
 		return true;
 	}
@@ -2304,12 +2290,9 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 		goto error;
 	}
 
-	if ((m->m_pkthdr.len == sizeof(struct wg_pkt_initiation) &&
-		*mtod(m, uint32_t *) == WG_PKT_INITIATION(sc)) ||
-	    (m->m_pkthdr.len == sizeof(struct wg_pkt_response) &&
-		*mtod(m, uint32_t *) == WG_PKT_RESPONSE(sc)) ||
-	    (m->m_pkthdr.len == sizeof(struct wg_pkt_cookie) &&
-		*mtod(m, uint32_t *) == WG_PKT_COOKIE(sc))) {
+	if (pkt_type == WG_PKT_INITIATION(sc) ||
+	    pkt_type == WG_PKT_RESPONSE(sc) ||
+	    pkt_type == WG_PKT_COOKIE(sc)) {
 
 		if (wg_queue_enqueue_handshake(&sc->sc_handshake_queue, pkt) != 0) {
 			if_inc_counter(sc->sc_ifp, IFCOUNTER_IQDROPS, 1);
@@ -2317,7 +2300,7 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 		}
 		GROUPTASK_ENQUEUE(&sc->sc_handshake);
 	} else if (m->m_pkthdr.len >= sizeof(struct wg_pkt_data) +
-	    NOISE_AUTHTAG_LEN && *mtod(m, uint32_t *) == WG_PKT_DATA(sc)) {
+	    NOISE_AUTHTAG_LEN && pkt_type == WG_PKT_DATA(sc)) {
 
 		/* Pullup whole header to read r_idx below. */
 		if ((pkt->p_mbuf = m_pullup(m, sizeof(struct wg_pkt_data))) == NULL)
@@ -2931,6 +2914,17 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 			err = EINVAL;
 			goto out_locked;
 		}
+        size_t ifmtu = if_getmtu(ifp);
+        size_t ip_header_size = sizeof(struct ip);
+#ifdef INET6
+        ip_header_size = sizeof(struct ip6_hdr);
+#endif
+        size_t max_pkt_size = ifmtu + ip_header_size +  sizeof(struct udphdr);
+        max_pkt_size = max_pkt_size & 0x0f ? (max_pkt_size | 0x0f) + 1 : 0;
+
+        if (max_pkt_size > ETHERMTU) {
+            DPRINTF(sc, "Warning: MTU is too big %lu tunnel packet may be %lu\n", ifmtu, max_pkt_size);
+        }
 		sc->sc_socket.so_transport_packet_junk_size = s4;
 	}
 
