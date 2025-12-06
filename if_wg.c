@@ -2782,6 +2782,35 @@ out:
 	return (err);
 }
 
+/* check if MTU matches s4, return new MTU if it does not */
+static size_t
+wg_check_mtu_s4(struct wg_softc *sc, size_t ifmtu, size_t s4)
+{
+	size_t ip_header_size = sizeof(struct ip);
+#ifdef INET6
+	ip_header_size = sizeof(struct ip6_hdr);
+#endif
+	size_t padding_mask = WG_PKT_PADDING - 1;
+	size_t payload_size = (ifmtu & padding_mask) ? (ifmtu | padding_mask) + 1 : ifmtu;
+	size_t max_pkt_size = ip_header_size
+		+ sizeof(struct udphdr)
+		+ s4
+		+ sizeof(struct wg_pkt_data)
+		+ payload_size;
+
+	if (max_pkt_size > ETHERMTU) {
+		size_t new_mtu = ETHERMTU - ip_header_size - sizeof(struct udphdr) - s4 - sizeof(struct wg_pkt_data);
+		new_mtu = new_mtu & ~padding_mask;
+
+		DPRINTF(sc, "MTU is too big %lu tunnel packet may be %lu with s4=%lu, suggested MTU is %lu\n",
+			ifmtu, max_pkt_size, s4, new_mtu);
+
+		return new_mtu;
+	}
+
+	return 0;
+}
+
 static int
 wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 {
@@ -2914,17 +2943,18 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 			err = EINVAL;
 			goto out_locked;
 		}
-        size_t ifmtu = if_getmtu(ifp);
-        size_t ip_header_size = sizeof(struct ip);
-#ifdef INET6
-        ip_header_size = sizeof(struct ip6_hdr);
-#endif
-        size_t max_pkt_size = ifmtu + ip_header_size +  sizeof(struct udphdr);
-        max_pkt_size = max_pkt_size & 0x0f ? (max_pkt_size | 0x0f) + 1 : 0;
 
-        if (max_pkt_size > ETHERMTU) {
-            DPRINTF(sc, "Warning: MTU is too big %lu tunnel packet may be %lu\n", ifmtu, max_pkt_size);
-        }
+		size_t new_mtu = wg_check_mtu_s4(sc, if_getmtu(ifp), s4);
+		if (new_mtu) {
+			if (new_mtu < ETHERMTU) {
+				DPRINTF(sc, "Setting MTU to %lu\n", new_mtu);
+				if_setmtu(ifp, new_mtu);
+			} else {
+				err = EINVAL;
+				goto out_locked;
+			}
+		}
+
 		sc->sc_socket.so_transport_packet_junk_size = s4;
 	}
 
@@ -3248,8 +3278,13 @@ wg_ioctl(if_t ifp, u_long cmd, caddr_t data)
 	case SIOCSIFMTU:
 		if (ifr->ifr_mtu <= 0 || ifr->ifr_mtu > MAX_MTU)
 			ret = EINVAL;
-		else
-			if_setmtu(ifp, ifr->ifr_mtu);
+		else {
+			if (wg_check_mtu_s4(sc, ifr->ifr_mtu, sc->sc_socket.so_transport_packet_junk_size)) {
+				ret = EINVAL;
+			} else {
+				if_setmtu(ifp, ifr->ifr_mtu);
+			}
+		}
 		break;
 	case SIOCADDMULTI:
 	case SIOCDELMULTI:
