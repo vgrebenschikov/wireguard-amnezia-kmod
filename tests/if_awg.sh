@@ -94,12 +94,12 @@ wg_basic_body()
 	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
 	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
 
-	wg1=$(jexec wgtest1 ifconfig wg create name wg1)
+	wg1=$(jexec wgtest1 ifconfig wg create debug name wg1)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
 	    private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
 
-	wg2=$(jexec wgtest2 ifconfig wg create name wg2)
+	wg2=$(jexec wgtest2 ifconfig wg create name wg2 debug)
 	echo "$pri2" | jexec wgtest2 wg set $wg2 listen-port 12345 \
 	    private-key /dev/stdin
 	pub2=$(jexec wgtest2 wg show $wg2 public-key)
@@ -110,7 +110,7 @@ wg_basic_body()
 	atf_check -s exit:0 -o ignore \
         jexec wgtest1 awg set $wg1 $awg_cfg
 	atf_check -s exit:0 \
-	    jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up debug
+	    jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up
 
 	atf_check -s exit:0 -o ignore \
 	    jexec wgtest2 wg set $wg2 peer "$pub1" \
@@ -118,7 +118,7 @@ wg_basic_body()
 	atf_check -s exit:0 -o ignore \
         jexec wgtest2 awg set $wg2 $awg_cfg
 	atf_check -s exit:0 \
-	    jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up debug
+	    jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up
 
 	# Generous timeout since the handshake takes some time.
 	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 -t 5 $tunnel2
@@ -169,13 +169,13 @@ wg_basic_crossaf_body()
 	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
 	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
 
-	wg1=$(jexec wgtest1 ifconfig wg create)
+	wg1=$(jexec wgtest1 ifconfig wg create debug)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
 	    private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
     jexec wgtest1 awg set $wg1 $awg_cfg
 
-	wg2=$(jexec wgtest2 ifconfig wg create)
+	wg2=$(jexec wgtest2 ifconfig wg create debug)
 	echo "$pri2" | jexec wgtest2 wg set $wg2 listen-port 12345 \
 	    private-key /dev/stdin
 	pub2=$(jexec wgtest2 wg show $wg2 public-key)
@@ -251,11 +251,11 @@ wg_basic_netmap_body()
 	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
 	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
 
-	wg1=$(jexec wgtest1 ifconfig wg create)
+	wg1=$(jexec wgtest1 ifconfig wg create debug)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
 	    private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
-	wg2=$(jexec wgtest2 ifconfig wg create)
+	wg2=$(jexec wgtest2 ifconfig wg create debug)
 	echo "$pri2" | jexec wgtest2 wg set $wg2 listen-port 12345 \
 	    private-key /dev/stdin
 	pub2=$(jexec wgtest2 wg show $wg2 public-key)
@@ -335,7 +335,7 @@ wg_key_peerdev_shared_body()
 
     awg_cfg=$(awg_config)
 
-	wg1=$(jexec wgtest1 ifconfig wg create)
+	wg1=$(jexec wgtest1 ifconfig wg create debug)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
 	    private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
@@ -381,11 +381,11 @@ wg_key_peerdev_makeshared_body()
 
     awg_cfg=$(awg_config)
 
-	wg1=$(jexec wgtest1 ifconfig wg create)
+	wg1=$(jexec wgtest1 ifconfig wg create debug)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
 	    private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
-	wg2=$(jexec wgtest1 ifconfig wg create)
+	wg2=$(jexec wgtest1 ifconfig wg create debug)
 	echo "$pri2" | jexec wgtest1 wg set $wg2 listen-port 12345 \
 	    private-key /dev/stdin
 
@@ -435,8 +435,8 @@ wg_vnet_parent_routing_body()
 
 	vnet_init
 
-	wg1=$(ifconfig wg create)
-	wg2=$(ifconfig wg create)
+	wg1=$(ifconfig wg create debug)
+	wg2=$(ifconfig wg create debug)
 
 	vnet_mkjail wgtest1 ${wg1}
 	vnet_mkjail wgtest2 ${wg2}
@@ -516,7 +516,7 @@ wg_allowedip_incremental_body()
 
     awg_cfg=$(awg_config)
 
-	wg1=$(jexec wgtest1 ifconfig wg create)
+	wg1=$(jexec wgtest1 ifconfig wg create debug)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
 
@@ -597,7 +597,7 @@ wg_allowedip_incremental_inet6_body()
 
     awg_cfg=$(awg_config)
 
-	wg1=$(jexec wgtest1 ifconfig wg create)
+	wg1=$(jexec wgtest1 ifconfig wg create debug)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
 
@@ -662,7 +662,7 @@ wg_allowedip_incremental_stealing_body()
 
     awg_cfg=$(awg_config)
 
-	wg1=$(jexec wgtest1 ifconfig wg create)
+	wg1=$(jexec wgtest1 ifconfig wg create debug)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
 

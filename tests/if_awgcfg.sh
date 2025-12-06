@@ -255,6 +255,9 @@ amnezia_go_body()
 	tunnel1=169.254.0.1
 	tunnel2=169.254.0.2
 
+    jail -r wgtest1 2> /dev/null || true
+    jail -r wgtest2 2> /dev/null || true
+
 	epair=$(vnet_mkepair)
 
 	vnet_init
@@ -263,18 +266,15 @@ amnezia_go_body()
 	vnet_mkjail wgtest2 ${epair}b
 
     awg_cfg=$(awg_config)
-    # exec > /dev/pts/0
-    # exec 2>&1
-    # set -x
 
 	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
 	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
 
-	wg1=$(jexec wgtest1 ifconfig wg create)
+	wg1=$(jexec wgtest1 ifconfig wg create name wg1 debug)
 	echo "$pri1" | jexec wgtest1 awg set $wg1 listen-port 12345 private-key /dev/stdin
 	pub1=$(jexec wgtest1 awg show $wg1 public-key)
 
-    wg2=wg7
+    wg2=wg2
     jexec wgtest2 pkill -9 amnezia-go || true
     sleep 1
 
