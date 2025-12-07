@@ -73,10 +73,10 @@
 /* First byte indicating packet type on the wire */
 #define WG_PKT_X_DEFAULT(x, y) ((x) ? (x) : (y))
 
-#define WG_PKT_INITIATION(sc)	WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_initiation, htole32(1))
-#define WG_PKT_RESPONSE(sc)	WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_response, htole32(2))
-#define WG_PKT_COOKIE(sc)	WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_cookie, htole32(3))
-#define WG_PKT_DATA(sc)		WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_data, htole32(4))
+#define WG_PKT_INITIATION(sc)	WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_initiation.min, htole32(1))
+#define WG_PKT_RESPONSE(sc)		WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_response.min, htole32(2))
+#define WG_PKT_COOKIE(sc)		WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_cookie.min, htole32(3))
+#define WG_PKT_DATA(sc)			WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_data.min, htole32(4))
 
 #define WG_PKT_DEFAULT_MAX	htole32(4)
 
@@ -214,6 +214,12 @@ struct wg_peer {
 	size_t				 p_aips_num;
 };
 
+struct wg_header_pair {
+	uint32_t min;
+	uint32_t max;
+};
+typedef struct wg_header_pair wg_hdr_pair;
+
 struct wg_socket {
 	struct socket	*so_so4;
 	struct socket	*so_so6;
@@ -221,17 +227,17 @@ struct wg_socket {
 	int		 so_fibnum;
 	in_port_t	 so_port;
 
-	uint32_t	 so_junk_packet_count;		// Jc
-	uint32_t	 so_junk_packet_min_size;	// Jmin
-	uint32_t	 so_junk_packet_max_size;	// Jmax
-	uint32_t	 so_init_packet_junk_size;	// S1
-	uint32_t	 so_response_packet_junk_size;	// S2
-	uint32_t	 so_cookie_packet_junk_size;	// S3
-	uint32_t	 so_transport_packet_junk_size;	// S4
-	uint32_t	 so_pkt_initiation;		// H1
-	uint32_t	 so_pkt_response;		// H2
-	uint32_t	 so_pkt_cookie;			// H3
-	uint32_t	 so_pkt_data;			// H4
+	uint32_t	so_junk_packet_count;			// Jc
+	uint32_t	so_junk_packet_min_size;		// Jmin
+	uint32_t	so_junk_packet_max_size;		// Jmax
+	uint32_t	so_init_packet_junk_size;		// S1
+	uint32_t	so_response_packet_junk_size;	// S2
+	uint32_t	so_cookie_packet_junk_size;		// S3
+	uint32_t	so_transport_packet_junk_size;	// S4
+	wg_hdr_pair	so_pkt_initiation;				// H1
+	wg_hdr_pair so_pkt_response;				// H2
+	wg_hdr_pair so_pkt_cookie;					// H3
+	wg_hdr_pair so_pkt_data;					// H4
 };
 
 struct wg_softc {
@@ -2824,14 +2830,14 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 
     struct {
         const char *name;
-        uint32_t *header;
-        uint32_t newv;
-        uint32_t curv;
+        wg_hdr_pair *header;
+        wg_hdr_pair newv;
+        wg_hdr_pair curv;
     } hparams[] = {
-        {"h1", &sc->sc_socket.so_pkt_initiation, 0, 0},
-        {"h2", &sc->sc_socket.so_pkt_response, 0, 0},
-        {"h3", &sc->sc_socket.so_pkt_cookie, 0, 0},
-        {"h4", &sc->sc_socket.so_pkt_data, 0, 0},
+        {"h1", &sc->sc_socket.so_pkt_initiation, {0, 0}, {0, 0}},
+        {"h2", &sc->sc_socket.so_pkt_response, {0, 0}, {0, 0}},
+        {"h3", &sc->sc_socket.so_pkt_cookie, {0, 0}, {0, 0}},
+        {"h4", &sc->sc_socket.so_pkt_data, {0, 0}, {0, 0}},
     };
     size_t hparams_count = sizeof(hparams) / sizeof(hparams[0]);
 
@@ -2966,15 +2972,23 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
             const char *value = nvlist_get_binary(nvl, hparams[i].name, &size);
             if (value && size > 0 && value[size - 1] == '\0') {
                 char *endptr;
-                uint32_t val = strtoul(value, &endptr, 10);
+                uint32_t val_min = strtoul(value, &endptr, 10);
+				uint32_t val_max = val_min;
 
-                if (*endptr != '\0') {
-                    DPRINTF(sc, "%s: %s is not a valid number\n", hparams[i].name, value);
+                if (*endptr == '-') {
+					endptr++;
+					val_max = strtoul(endptr, &endptr, 10);
+				}
+
+				if (*endptr != '\0') {
+                    DPRINTF(sc, "%s: %s is not a valid number or range\n", hparams[i].name, value);
                     err = EINVAL;
                     goto out_locked;
                 }
-                hparams[i].newv = hparams[i].curv = val;
-            } else {
+
+				hparams[i].newv.min = hparams[i].curv.min = val_min;
+				hparams[i].newv.max = hparams[i].curv.max = val_max;
+		} else {
                 DPRINTF(sc, "%s: value is not a valid string\n", hparams[i].name);
                 err = EINVAL;
                 goto out_locked;
@@ -2984,33 +2998,45 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 
 	// Check magic headers
 	for(int i = 0; i < hparams_count; i++) {
-		if (hparams[i].newv == 0) {
+		if (hparams[i].newv.min == 0) {
 			continue;
 		}
 
 		// Magic headers should be greater than WG_PKT_DATA
-		if (hparams[i].newv <= WG_PKT_DEFAULT_MAX) {
+		if (hparams[i].newv.min <= WG_PKT_DEFAULT_MAX) {
             DPRINTF(sc, "Magic Header should be above %u: %s=%u\n",
-                    WG_PKT_DEFAULT_MAX, hparams[i].name, hparams[i].newv);
+                    WG_PKT_DEFAULT_MAX, hparams[i].name, hparams[i].newv.min);
 			err = EINVAL;
 			goto out_locked;
 		}
 
-		// Magic headers should be different
+		// Magic header range should be min <= max
+		if (hparams[i].newv.min > hparams[i].newv.max) {
+            DPRINTF(sc, "Magic Header range should be min <= max: %s=%u-%u\n",
+                    hparams[i].name, hparams[i].newv.min, hparams[i].newv.max);
+			err = EINVAL;
+			goto out_locked;
+		}
+
+		// Magic headers should not duplicate or overlap
+		// Check newv[i] against all curv[j] (j != i) to ensure ranges don't overlap
 		for(int j = i - 1; j >= 0; j--) {
-			if (hparams[j].curv && hparams[i].newv == hparams[j].curv) {
-                DPRINTF(sc, "Duplicate Magic Header: %s=%u == %s=%u\n",
-                        hparams[i].name, hparams[i].newv,
-                        hparams[j].name, hparams[j].curv);
-				err = EINVAL;
-				goto out_locked;
-			}
+            // Two ranges [a_min, a_max] and [b_min, b_max] overlap if:
+            // a_min <= b_max && b_min <= a_max
+            if (hparams[i].newv.min <= hparams[j].curv.max &&
+                hparams[j].curv.min <= hparams[i].newv.max) {
+                DPRINTF(sc, "Overlapping Magic Header ranges: %s=%u-%u overlaps with %s=%u-%u\n",
+                        hparams[i].name, hparams[i].newv.min, hparams[i].newv.max,
+                        hparams[j].name, hparams[j].curv.min, hparams[j].curv.max);
+                err = EINVAL;
+                goto out_locked;
+            }
 		}
 	}
 
     // assign magic headers
     for(int i = 0; i < hparams_count; i++) {
-        if (hparams[i].newv)
+        if (hparams[i].newv.min != 0)
             *hparams[i].header = hparams[i].newv;
     }
 
@@ -3095,12 +3121,12 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 
     struct {
         const char *name;
-        uint32_t header;
+        wg_hdr_pair *header;
     } hparams[] = {
-        {"h1", sc->sc_socket.so_pkt_initiation},
-        {"h2", sc->sc_socket.so_pkt_response},
-        {"h3", sc->sc_socket.so_pkt_cookie},
-        {"h4", sc->sc_socket.so_pkt_data},
+        {"h1", &sc->sc_socket.so_pkt_initiation},
+        {"h2", &sc->sc_socket.so_pkt_response},
+        {"h3", &sc->sc_socket.so_pkt_cookie},
+        {"h4", &sc->sc_socket.so_pkt_data},
     };
 
 	nvl = nvlist_create(0);
@@ -3127,10 +3153,15 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 		nvlist_add_number(nvl, "s4", sc->sc_socket.so_transport_packet_junk_size);
 
     for (i = 0; i < sizeof(hparams) / sizeof(hparams[0]); i++) {
-        if (hparams[i].header) {
-            char value[11];
-            size_t len = snprintf(value, sizeof(value), "%u", hparams[i].header);
-            nvlist_add_binary(nvl, hparams[i].name, value, len + 1); // +1 for the null terminator
+        if (hparams[i].header->min) {
+            char value[32];
+			size_t len;
+			if (hparams[i].header->min == hparams[i].header->max) {
+				len = snprintf(value, sizeof(value), "%u", hparams[i].header->min);
+			} else {
+				len = snprintf(value, sizeof(value), "%u-%u", hparams[i].header->min, hparams[i].header->max);
+			}
+			nvlist_add_binary(nvl, hparams[i].name, value, len + 1); // +1 for the null terminator
         }
     }
 
@@ -3407,10 +3438,10 @@ wg_clone_create(struct if_clone *ifc, char *name, size_t len,
 	sc->sc_socket.so_junk_packet_max_size = 0;
 	sc->sc_socket.so_init_packet_junk_size = 0;
 	sc->sc_socket.so_response_packet_junk_size = 0;
-	sc->sc_socket.so_pkt_initiation = 0;
-	sc->sc_socket.so_pkt_response = 0;
-	sc->sc_socket.so_pkt_cookie = 0;
-	sc->sc_socket.so_pkt_data = 0;
+	sc->sc_socket.so_pkt_initiation = (wg_hdr_pair){ .min = 0, .max = 0 };
+	sc->sc_socket.so_pkt_response = (wg_hdr_pair){ .min = 0, .max = 0 };
+	sc->sc_socket.so_pkt_cookie = (wg_hdr_pair){ .min = 0, .max = 0 };
+	sc->sc_socket.so_pkt_data = (wg_hdr_pair){ .min = 0, .max = 0 };
 
 	TAILQ_INIT(&sc->sc_peers);
 	sc->sc_peers_num = 0;
