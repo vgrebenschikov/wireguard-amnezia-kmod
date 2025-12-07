@@ -53,7 +53,7 @@ awg_config() {
 
     echo \
         jc $jc jmin $jmin jmax $jmax \
-        s1 $s1 s2 $s2 s3 $s3 s4 $s4
+        s1 $s1 s2 $s2 s3 $s3 s4 $s4 \
         h1 $h1 h2 $h2 h3 $h3 h4 $h4
 }
 
