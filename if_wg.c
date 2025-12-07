@@ -2808,7 +2808,7 @@ wg_check_mtu_s4(struct wg_softc *sc, size_t ifmtu, size_t s4)
 		size_t new_mtu = ETHERMTU - ip_header_size - sizeof(struct udphdr) - s4 - sizeof(struct wg_pkt_data);
 		new_mtu = new_mtu & ~padding_mask;
 
-		DPRINTF(sc, "MTU is too big %lu tunnel packet may be %lu with s4=%lu, suggested MTU is %lu\n",
+		DPRINTF(sc, "MTU is too big %zu tunnel packet may be %zu with s4=%zu, suggested MTU is %zu\n",
 			ifmtu, max_pkt_size, s4, new_mtu);
 
 		return new_mtu;
@@ -2882,7 +2882,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	if (nvlist_exists_number(nvl, "jc")) {
 		uint64_t jc = nvlist_get_number(nvl, "jc");
 		if (jc > UINT8_MAX) {
-            DPRINTF(sc, "jc=%lu is too large\n", jc);
+            DPRINTF(sc, "jc=%" PRIu64 " is too large\n", jc);
 			err = EINVAL;
 			goto out_locked;
 		}
@@ -2891,7 +2891,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	if (nvlist_exists_number(nvl, "jmin")) {
 		uint64_t jmin = nvlist_get_number(nvl, "jmin");
 		if (jmin > 1200) {
-            DPRINTF(sc, "jmin=%lu is too large, should be less than 1200\n", jmin);
+            DPRINTF(sc, "jmin=%" PRIu64 " is too large, should be less than 1200\n", jmin);
 			err = EINVAL;
 			goto out_locked;
 		}
@@ -2900,7 +2900,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	if (nvlist_exists_number(nvl, "jmax")) {
 		uint64_t jmax = nvlist_get_number(nvl, "jmax");
 		if (jmax > 1280 || jmax <= sc->sc_socket.so_junk_packet_min_size) {
-            DPRINTF(sc, "jmax=%lu is too large, should be less than 1280 and greater than jmin\n", jmax);
+            DPRINTF(sc, "jmax=%" PRIu64 " is too large, should be less than 1280 and greater than jmin\n", jmax);
 			err = EINVAL;
 			goto out_locked;
 		}
@@ -2910,7 +2910,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	if (nvlist_exists_number(nvl, "s1")) {
 		s1 = nvlist_get_number(nvl, "s1");
 		if (s1 + s1size > 1280) {
-            DPRINTF(sc, "s1=%lu is too large, should be less than %lu\n", s1, 1280 - s1size);
+            DPRINTF(sc, "s1=%" PRIu64 " is too large, should be less than %" PRIu64 "\n", s1, (uint64_t)(1280 - s1size));
 			err = EINVAL;
 			goto out_locked;
 		}
@@ -2920,14 +2920,14 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	if (nvlist_exists_number(nvl, "s2")) {
 		s2 = nvlist_get_number(nvl, "s2");
 		if (s2 + s2size > 1280) {
-            DPRINTF(sc, "s2=%lu is too large, should be less than %lu\n", s2, 1280 - s2size);
+            DPRINTF(sc, "s2=%" PRIu64 " is too large, should be less than %" PRIu64 "\n", s2, (uint64_t)(1280 - s2size));
 			err = EINVAL;
 			goto out_locked;
 		}
 		sc->sc_socket.so_response_packet_junk_size = s2;
 	}
 	if ((s1 || s2) && (s1 + s1size == s2 + s2size)) {
-        DPRINTF(sc, "s1 + %lu and s2 must be different\n", s1size - s2size);
+        DPRINTF(sc, "s1 + %" PRIu64 " and s2 must be different\n", s1size - s2size);
 		err = EINVAL;
 		goto out_locked;
 	}
@@ -2935,7 +2935,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		uint64_t s3 = nvlist_get_number(nvl, "s3");
 		uint64_t s3size = sizeof(struct wg_pkt_cookie);
 		if (s3 + s3size > 1280) {
-            DPRINTF(sc, "s3=%lu is too large, should be less than %lu\n", s3, 1280 - s3size);
+            DPRINTF(sc, "s3=%" PRIu64 " is too large, should be less than %" PRIu64 "\n", s3, (uint64_t)(1280 - s3size));
 			err = EINVAL;
 			goto out_locked;
 		}
@@ -2945,7 +2945,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		uint64_t s4 = nvlist_get_number(nvl, "s4");
 		uint64_t s4size = sizeof(struct wg_pkt_data);
 		if (s4 + s4size > 1280) {
-            DPRINTF(sc, "s4=%lu is too large, should be less than %lu\n", s4, 1280 - s4size);
+            DPRINTF(sc, "s4=%" PRIu64 " is too large, should be less than %" PRIu64 "\n", s4, (uint64_t)(1280 - s4size));
 			err = EINVAL;
 			goto out_locked;
 		}
@@ -2953,7 +2953,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		size_t new_mtu = wg_check_mtu_s4(sc, if_getmtu(ifp), s4);
 		if (new_mtu) {
 			if (new_mtu < ETHERMTU) {
-				DPRINTF(sc, "Setting MTU to %lu\n", new_mtu);
+				DPRINTF(sc, "Setting MTU to %zu\n", new_mtu);
 				if_setmtu(ifp, new_mtu);
 			} else {
 				err = EINVAL;
