@@ -2831,13 +2831,13 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
     struct {
         const char *name;
         wg_hdr_pair *header;
-        wg_hdr_pair newv;
-        wg_hdr_pair curv;
+        wg_hdr_pair value;
+        bool changed;
     } hparams[] = {
-        {"h1", &sc->sc_socket.so_pkt_initiation, {0, 0}, {0, 0}},
-        {"h2", &sc->sc_socket.so_pkt_response, {0, 0}, {0, 0}},
-        {"h3", &sc->sc_socket.so_pkt_cookie, {0, 0}, {0, 0}},
-        {"h4", &sc->sc_socket.so_pkt_data, {0, 0}, {0, 0}},
+        {"h1", &sc->sc_socket.so_pkt_initiation, {0, 0}, false},
+        {"h2", &sc->sc_socket.so_pkt_response, {0, 0}, false},
+        {"h3", &sc->sc_socket.so_pkt_cookie, {0, 0}, false},
+        {"h4", &sc->sc_socket.so_pkt_data, {0, 0}, false},
     };
     size_t hparams_count = sizeof(hparams) / sizeof(hparams[0]);
 
@@ -2965,7 +2965,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	}
 
     for (int i = 0; i < hparams_count; i++) {
-        hparams[i].curv = *hparams[i].header;
+        hparams[i].value = *hparams[i].header;
 
         if (nvlist_exists_binary(nvl, hparams[i].name)) {
             size_t size;
@@ -2986,8 +2986,9 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
                     goto out_locked;
                 }
 
-				hparams[i].newv.min = hparams[i].curv.min = val_min;
-				hparams[i].newv.max = hparams[i].curv.max = val_max;
+				hparams[i].value.min = val_min;
+				hparams[i].value.max = val_max;
+				hparams[i].changed = true;
 		} else {
                 DPRINTF(sc, "%s: value is not a valid string\n", hparams[i].name);
                 err = EINVAL;
@@ -2998,22 +2999,22 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 
 	// Check magic headers
 	for(int i = 0; i < hparams_count; i++) {
-		if (hparams[i].newv.min == 0) {
+		if (hparams[i].value.min == 0) {
 			continue;
 		}
 
 		// Magic headers should be greater than WG_PKT_DATA
-		if (hparams[i].newv.min <= WG_PKT_DEFAULT_MAX) {
+		if (hparams[i].value.min <= WG_PKT_DEFAULT_MAX) {
             DPRINTF(sc, "Magic Header should be above %u: %s=%u\n",
-                    WG_PKT_DEFAULT_MAX, hparams[i].name, hparams[i].newv.min);
+                    WG_PKT_DEFAULT_MAX, hparams[i].name, hparams[i].value.min);
 			err = EINVAL;
 			goto out_locked;
 		}
 
 		// Magic header range should be min <= max
-		if (hparams[i].newv.min > hparams[i].newv.max) {
+		if (hparams[i].value.min > hparams[i].value.max) {
             DPRINTF(sc, "Magic Header range should be min <= max: %s=%u-%u\n",
-                    hparams[i].name, hparams[i].newv.min, hparams[i].newv.max);
+                    hparams[i].name, hparams[i].value.min, hparams[i].value.max);
 			err = EINVAL;
 			goto out_locked;
 		}
@@ -3023,11 +3024,11 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		for(int j = i - 1; j >= 0; j--) {
             // Two ranges [a_min, a_max] and [b_min, b_max] overlap if:
             // a_min <= b_max && b_min <= a_max
-            if (hparams[i].newv.min <= hparams[j].curv.max &&
-                hparams[j].curv.min <= hparams[i].newv.max) {
+            if (hparams[i].value.min <= hparams[j].value.max &&
+                hparams[j].value.min <= hparams[i].value.max) {
                 DPRINTF(sc, "Overlapping Magic Header ranges: %s=%u-%u overlaps with %s=%u-%u\n",
-                        hparams[i].name, hparams[i].newv.min, hparams[i].newv.max,
-                        hparams[j].name, hparams[j].curv.min, hparams[j].curv.max);
+                        hparams[i].name, hparams[i].value.min, hparams[i].value.max,
+                        hparams[j].name, hparams[j].value.min, hparams[j].value.max);
                 err = EINVAL;
                 goto out_locked;
             }
@@ -3036,8 +3037,8 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 
     // assign magic headers
     for(int i = 0; i < hparams_count; i++) {
-        if (hparams[i].newv.min != 0)
-            *hparams[i].header = hparams[i].newv;
+        if (hparams[i].changed)
+            *hparams[i].header = hparams[i].value;
     }
 
 

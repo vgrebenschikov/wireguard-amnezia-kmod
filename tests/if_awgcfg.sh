@@ -151,6 +151,22 @@ awg_configuration_body()
 	atf_check -s exit:0 -o ignore \
         awg set $wg $(awg_config)
 
+	# check reset of magic headers
+	atf_check -s exit:0 -o ignore \
+        awg set $wg h1 0 h2 0 h3 0 h4 0
+
+	atf_check -s exit:0 -o not-match:'h1:' -e empty \
+		awg show $wg
+
+	atf_check -s exit:0 -o not-match:'h2:' -e empty \
+		awg show $wg
+
+	atf_check -s exit:0 -o not-match:'h3:' -e empty \
+		awg show $wg
+
+	atf_check -s exit:0 -o not-match:'h4:' -e empty \
+		awg show $wg
+
     atf_check -s exit:0 -o ignore \
         awg show $wg
 
