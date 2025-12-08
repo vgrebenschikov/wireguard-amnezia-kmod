@@ -30,31 +30,31 @@
 . "$(atf_get_srcdir)/vnet.subr"
 
 awg_config() {
-    for i in 1 2 3 4; do
-        jc=$(jot -r 1 3 10)
-        jmin=$(jot -r 1 50 100)
-        jmax=$(jot -r 1 $jmin 1000)
+	for i in 1 2 3 4; do
+		jc=$(jot -r 1 3 10)
+		jmin=$(jot -r 1 50 100)
+		jmax=$(jot -r 1 $jmin 1000)
 
-        s1=$(jot -r 1 15 1132)
-        s2=$(jot -r 1 15 1188)
-        s3=$(jot -r 1 15 100)
-        s4=$(jot -r 1 15 60)
+		s1=$(jot -r 1 15 1132)
+		s2=$(jot -r 1 15 1188)
+		s3=$(jot -r 1 15 100)
+		s4=$(jot -r 1 15 60)
 
-        h1=$(jot -r 1 5 4294967295)
-        h2=$(jot -r 1 5 4294967295)
-        h3=$(jot -r 1 5 4294967295)
-        h4=$(jot -r 1 5 4294967295)
+		h1=$(jot -r 1 5 4294967295)
+		h2=$(jot -r 1 5 4294967295)
+		h3=$(jot -r 1 5 4294967295)
+		h4=$(jot -r 1 5 4294967295)
 
-        if [ $(($s1 + 56)) -ne $s2 ] && \
-           [ $(echo -e "$h1\n$h2\n$h3\n$h4" | sort -u | wc -l) -eq 4 ]; then
-            break
-        fi
-    done
+		if [ $(($s1 + 56)) -ne $s2 ] && \
+		   [ $(echo -e "$h1\n$h2\n$h3\n$h4" | sort -u | wc -l) -eq 4 ]; then
+			break
+		fi
+	done
 
-    echo \
-        jc $jc jmin $jmin jmax $jmax \
-        s1 $s1 s2 $s2 s3 $s3 s4 $s4 \
-        h1 $h1 h2 $h2 h3 $h3 h4 $h4
+	echo \
+		jc $jc jmin $jmin jmax $jmax \
+		s1 $s1 s2 $s2 s3 $s3 s4 $s4 \
+		h1 $h1 h2 $h2 h3 $h3 h4 $h4
 }
 
 atf_test_case "awg_configuration" "cleanup"
@@ -67,93 +67,93 @@ awg_configuration_head()
 awg_configuration_body()
 {
 	local epair pri1 pri2 pub1 pub2 wg1 wg2
-        local endpoint1 endpoint2 tunnel1 tunnel2
+		local endpoint1 endpoint2 tunnel1 tunnel2
 
 	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
 
 	wg=$(ifconfig wg create debug)
 
-    # jc/jmin/jmax
+	# jc/jmin/jmax
 
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg jc 256
+		awg set $wg jc 256
 
 	atf_check -s exit:0 -o ignore \
-        awg set $wg jc 255
+		awg set $wg jc 255
 
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg jmax 1281
+		awg set $wg jmax 1281
 
 	atf_check -s exit:0 -o ignore \
-        awg set $wg jmax 1280
+		awg set $wg jmax 1280
 
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg jmin 1280 jmax 1280
+		awg set $wg jmin 1280 jmax 1280
 
 	jx=$(jot -r 1 10 1280)
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg jmin $jx jmax $jx
+		awg set $wg jmin $jx jmax $jx
 
 	jmin=$(jot -r 1 10 80)
 	jdlt=$(jot -r 1 $jmin 1000)
-    jmax=$(($jmin + $jdlt))
+	jmax=$(($jmin + $jdlt))
 	atf_check -s exit:0 -o ignore \
-        awg set $wg jmin $jmin jmax $jmax
+		awg set $wg jmin $jmin jmax $jmax
 
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg jmin $jmax jmax $jmin
+		awg set $wg jmin $jmax jmax $jmin
 
-    # s1/s2
+	# s1/s2
 
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg s1 100 s2 156
+		awg set $wg s1 100 s2 156
 
-    s1=$(jot -r 1 15 1132)
-    s2=$(($s1 + 56))
+	s1=$(jot -r 1 15 1132)
+	s2=$(($s1 + 56))
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg s1 $s1 s2 $s2
+		awg set $wg s1 $s1 s2 $s2
 
-    s1=$(jot -r 1 71 1132)
-    s2=$(($s1 - 56))
-
-	atf_check -s exit:0 -o ignore \
-        awg set $wg s1 $s1 s2 $s2
+	s1=$(jot -r 1 71 1132)
+	s2=$(($s1 - 56))
 
 	atf_check -s exit:0 -o ignore \
-        awg set $wg s1 $s1 s2 $s1
-
-    # h1/h2/h3/h4
-
-    h=$(jot -r 1 5 4294967295)
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg h1 $h h2 $h
-
-    h=$(jot -r 1 5 4294967295)
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg h1 $h h3 $h
-
-    h=$(jot -r 1 5 4294967295)
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg h1 $h h4 $h
-
-    h=$(jot -r 1 5 4294967295)
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg h1 0 h2 $h h3 $h
-
-    h=$(jot -r 1 5 4294967295)
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg h1 0 h2 0 h3 $h h4 $h
-
-    h=$(jot -r 1 5 4294967295)
-	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-        awg set $wg h1 0 h2 $h h3 $h h4 0
+		awg set $wg s1 $s1 s2 $s2
 
 	atf_check -s exit:0 -o ignore \
-        awg set $wg $(awg_config)
+		awg set $wg s1 $s1 s2 $s1
+
+	# h1/h2/h3/h4
+
+	h=$(jot -r 1 5 4294967295)
+	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
+		awg set $wg h1 $h h2 $h
+
+	h=$(jot -r 1 5 4294967295)
+	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
+		awg set $wg h1 $h h3 $h
+
+	h=$(jot -r 1 5 4294967295)
+	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
+		awg set $wg h1 $h h4 $h
+
+	h=$(jot -r 1 5 4294967295)
+	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
+		awg set $wg h1 0 h2 $h h3 $h
+
+	h=$(jot -r 1 5 4294967295)
+	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
+		awg set $wg h1 0 h2 0 h3 $h h4 $h
+
+	h=$(jot -r 1 5 4294967295)
+	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
+		awg set $wg h1 0 h2 $h h3 $h h4 0
+
+	atf_check -s exit:0 -o ignore \
+		awg set $wg $(awg_config)
 
 	# check reset of magic headers
 	atf_check -s exit:0 -o ignore \
-        awg set $wg h1 0 h2 0 h3 0 h4 0
+		awg set $wg h1 0 h2 0 h3 0 h4 0
 
 	atf_check -s exit:0 -o not-match:'h1:' -e empty \
 		awg show $wg
@@ -167,16 +167,16 @@ awg_configuration_body()
 	atf_check -s exit:0 -o not-match:'h4:' -e empty \
 		awg show $wg
 
-    atf_check -s exit:0 -o ignore \
-        awg show $wg
+	atf_check -s exit:0 -o ignore \
+		awg show $wg
 
 }
 
 awg_configuration_cleanup()
 {
-    for i in $(ifconfig -g wg); do
-        ifconfig $i destroy
-    done
+	for i in $(ifconfig -g wg); do
+		ifconfig $i destroy
+	done
 }
 
 atf_test_case "wide_range_parameters" "cleanup"
@@ -189,7 +189,7 @@ wide_range_parameters_head()
 wide_range_parameters_body()
 {
 	local epair pri1 pri2 pub1 pub2 wg1 wg2
-        local endpoint1 endpoint2 tunnel1 tunnel2
+		local endpoint1 endpoint2 tunnel1 tunnel2
 
 	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
 
@@ -208,36 +208,36 @@ wide_range_parameters_body()
 	vnet_mkjail wgtest1 ${epair}a
 	vnet_mkjail wgtest2 ${epair}b
 
-    awg_cfg=$(awg_config)
+	awg_cfg=$(awg_config)
 
 	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
 	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
 
 	wg1=$(jexec wgtest1 ifconfig wg create debug)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
-	    private-key /dev/stdin
+		private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
 
 	wg2=$(jexec wgtest2 ifconfig wg create debug)
 	echo "$pri2" | jexec wgtest2 wg set $wg2 listen-port 12345 \
-	    private-key /dev/stdin
+		private-key /dev/stdin
 	pub2=$(jexec wgtest2 wg show $wg2 public-key)
 
 	atf_check -s exit:0 -o ignore \
-	    jexec wgtest1 wg set $wg1 peer "$pub2" \
-	    endpoint ${endpoint2}:12345 allowed-ips ${tunnel2}/32
+		jexec wgtest1 wg set $wg1 peer "$pub2" \
+		endpoint ${endpoint2}:12345 allowed-ips ${tunnel2}/32
 	atf_check -s exit:0 -o ignore \
-        jexec wgtest1 awg set $wg1 $awg_cfg
+		jexec wgtest1 awg set $wg1 $awg_cfg
 	atf_check -s exit:0 \
-	    jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up debug
+		jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up debug
 
 	atf_check -s exit:0 -o ignore \
-	    jexec wgtest2 wg set $wg2 peer "$pub1" \
-	    endpoint ${endpoint1}:12345 allowed-ips ${tunnel1}/32
+		jexec wgtest2 wg set $wg2 peer "$pub1" \
+		endpoint ${endpoint1}:12345 allowed-ips ${tunnel1}/32
 	atf_check -s exit:0 -o ignore \
-        jexec wgtest2 awg set $wg2 $awg_cfg
+		jexec wgtest2 awg set $wg2 $awg_cfg
 	atf_check -s exit:0 \
-	    jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up debug
+		jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up debug
 
 	# Generous timeout since the handshake takes some time.
 	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 -t 5 $tunnel2
@@ -259,7 +259,7 @@ amnezia_go_head()
 amnezia_go_body()
 {
 	local epair pri1 pri2 pub1 pub2 wg1 wg2
-        local endpoint1 endpoint2 tunnel1 tunnel2
+		local endpoint1 endpoint2 tunnel1 tunnel2
 
 	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
 
@@ -271,8 +271,8 @@ amnezia_go_body()
 	tunnel1=169.254.0.1
 	tunnel2=169.254.0.2
 
-    jail -r wgtest1 2> /dev/null || true
-    jail -r wgtest2 2> /dev/null || true
+	jail -r wgtest1 2> /dev/null || true
+	jail -r wgtest2 2> /dev/null || true
 
 	epair=$(vnet_mkepair)
 
@@ -281,7 +281,7 @@ amnezia_go_body()
 	vnet_mkjail wgtest1 ${epair}a
 	vnet_mkjail wgtest2 ${epair}b
 
-    awg_cfg=$(awg_config)
+	awg_cfg=$(awg_config)
 
 	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
 	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
@@ -290,37 +290,37 @@ amnezia_go_body()
 	echo "$pri1" | jexec wgtest1 awg set $wg1 listen-port 12345 private-key /dev/stdin
 	pub1=$(jexec wgtest1 awg show $wg1 public-key)
 
-    wg2=wg2
-    jexec wgtest2 pkill -9 amnezia-go || true
-    sleep 1
+	wg2=wg2
+	jexec wgtest2 pkill -9 amnezia-go || true
+	sleep 1
 
 	jexec wgtest2 amnezia-go --foreground $wg2 & awgpid=$!
-    sleep 3
+	sleep 3
 
 	echo "$pri2" | jexec wgtest2 awg set $wg2 listen-port 12345 private-key /dev/stdin
 	pub2=$(jexec wgtest2 awg show $wg2 public-key)
 
 	atf_check -s exit:0 -o ignore \
-	    jexec wgtest1 awg set $wg1 peer "$pub2" \
-	    endpoint ${endpoint2}:12345 allowed-ips ${tunnel2}/32
+		jexec wgtest1 awg set $wg1 peer "$pub2" \
+		endpoint ${endpoint2}:12345 allowed-ips ${tunnel2}/32
 	atf_check -s exit:0 -o ignore \
-        jexec wgtest1 awg set $wg1 $awg_cfg
+		jexec wgtest1 awg set $wg1 $awg_cfg
 	atf_check -s exit:0 \
-	    jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up debug
+		jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up debug
 
 	atf_check -s exit:0 -o ignore \
-	    jexec wgtest2 awg set $wg2 peer "$pub1" \
-	    endpoint ${endpoint1}:12345 allowed-ips ${tunnel1}/32
+		jexec wgtest2 awg set $wg2 peer "$pub1" \
+		endpoint ${endpoint1}:12345 allowed-ips ${tunnel1}/32
 	atf_check -s exit:0 -o ignore \
-        jexec wgtest2 awg set $wg2 $awg_cfg
+		jexec wgtest2 awg set $wg2 $awg_cfg
 	atf_check -s exit:0 \
-	    jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up debug
+		jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up debug
 
 	# Generous timeout since the handshake takes some time.
 	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 -t 5 $tunnel2
 	atf_check -s exit:0 -o ignore jexec wgtest2 ping -c 1 $tunnel1
 
-    atf_check -s exit:0 kill -TERM $awgpid
+	atf_check -s exit:0 kill -TERM $awgpid
 	wait $awgpid
 }
 
