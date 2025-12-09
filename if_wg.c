@@ -1372,11 +1372,32 @@ wg_peer_send_buf_junk(struct wg_peer *peer, uint8_t *buf, size_t len, size_t jun
 	}
 
 	total_len = len + junk_len;
+
+#ifdef AWG2_JUNK_AFTER_HANDSHAKE
+	struct wg_softc *sc = peer->p_sc;
+	size_t post_junk_len = 0;
+
+	/* if AWG2 - send post-junk data */
+	int mtu = if_getmtu(sc->sc_ifp);
+	if ((sc->sc_socket.so_cookie_packet_junk_size || sc->sc_socket.so_transport_packet_junk_size)
+		&& mtu > total_len) {
+		size_t post_junk_len_max = min(mtu - total_len, junk_len);
+		post_junk_len = arc4random_uniform((u_int32_t)post_junk_len_max) + 1;
+		total_len += post_junk_len;
+	}
+#endif
+
 	junk_buf = malloc(total_len, M_DEVBUF, M_NOWAIT);
 	if (junk_buf == NULL)
 		return;
 
 	arc4random_buf(junk_buf, junk_len);
+
+#ifdef AWG2_JUNK_AFTER_HANDSHAKE
+	if (post_junk_len)
+		arc4random_buf(junk_buf + junk_len + len, post_junk_len);
+#endif
+
 	memcpy(junk_buf + junk_len, buf, len);
 
 	wg_peer_send_buf(peer, junk_buf, total_len);
@@ -2177,12 +2198,15 @@ wg_queue_dequeue_parallel(struct wg_queue *parallel)
 }
 
 static uint32_t
-wg_match_pkt_skipping_junk(struct mbuf **mptr, size_t junk_size, uint32_t pkt_type)
+wg_match_pkt_skipping_junk(struct mbuf **mptr, size_t junk_size, uint32_t pkt_type, size_t header_size)
 {
 	size_t req_size = junk_size + sizeof(uint32_t);
 
 	/* required size is more then total packet size */
 	if (req_size >= (*mptr)->m_pkthdr.len)
+		return 0;
+
+	if (header_size && (*mptr)->m_pkthdr.len != header_size + junk_size)
 		return 0;
 
 	/* if not whole packet header in mbuf, pullup to required size */
@@ -2213,22 +2237,54 @@ wg_match_input_skipping_junk(struct mbuf **mptr, struct wg_softc *sc)
 
     /* Check if this is a initiation packet with junk */
 	if (*mptr && !matched) {
-		matched = wg_match_pkt_skipping_junk(mptr, sc->sc_socket.so_init_packet_junk_size, WG_PKT_INITIATION(sc));
+		matched = wg_match_pkt_skipping_junk(
+			mptr,
+			sc->sc_socket.so_init_packet_junk_size,
+			WG_PKT_INITIATION(sc),
+#ifndef AWG2_JUNK_AFTER_HANDSHAKE
+			sizeof(struct wg_pkt_initiation)
+#else
+			0
+#endif
+		);
 	}
 
 	/* Check if this is a response packet with junk */
 	if (*mptr && !matched) {
-		matched = wg_match_pkt_skipping_junk(mptr, sc->sc_socket.so_response_packet_junk_size, WG_PKT_RESPONSE(sc));
+		matched = wg_match_pkt_skipping_junk(
+			mptr,
+			sc->sc_socket.so_response_packet_junk_size,
+			WG_PKT_RESPONSE(sc),
+#ifndef AWG2_JUNK_AFTER_HANDSHAKE
+			sizeof(struct wg_pkt_response)
+#else
+			0
+#endif
+		);
 	}
 
 	/* Check if this is a cookie packet with junk */
 	if (*mptr && !matched) {
-		matched = wg_match_pkt_skipping_junk(mptr, sc->sc_socket.so_cookie_packet_junk_size, WG_PKT_COOKIE(sc));
+		matched = wg_match_pkt_skipping_junk(
+			mptr,
+			sc->sc_socket.so_cookie_packet_junk_size,
+			WG_PKT_COOKIE(sc),
+#ifndef AWG2_JUNK_AFTER_HANDSHAKE
+			sizeof(struct wg_pkt_cookie)
+#else
+			0
+#endif
+		);
 	}
 
 	/* Check if this is a data packet with junk */
 	if (*mptr && !matched) {
-		matched = wg_match_pkt_skipping_junk(mptr, sc->sc_socket.so_transport_packet_junk_size, WG_PKT_DATA(sc));
+		matched = wg_match_pkt_skipping_junk(
+			mptr,
+			sc->sc_socket.so_transport_packet_junk_size,
+			WG_PKT_DATA(sc),
+			0
+		);
 	}
 
 	return matched;
