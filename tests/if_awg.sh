@@ -1,3 +1,4 @@
+#!/usr/libexec/atf-sh
 #
 # SPDX-License-Identifier: BSD-2-Clause
 #
@@ -28,34 +29,7 @@
 # SUCH DAMAGE.
 
 . "$(atf_get_srcdir)/vnet.subr"
-
-awg_config() {
-	for i in 1 2 3 4; do
-		jc=$(jot -r 1 3 10)
-		jmin=$(jot -r 1 50 100)
-		jmax=$(jot -r 1 $jmin 1000)
-
-		s1=$(jot -r 1 15 1132)
-		s2=$(jot -r 1 15 1188)
-		s3=$(jot -r 1 15 100)
-		s4=$(jot -r 1 15 60)
-
-		h1=$(jot -r 1 5 4294967295)
-		h2=$(jot -r 1 5 4294967295)
-		h3=$(jot -r 1 5 4294967295)
-		h4=$(jot -r 1 5 4294967295)
-
-		if [ $(($s1 + 56)) -ne $s2 ] && \
-		   [ $(echo -e "$h1\n$h2\n$h3\n$h4" | sort -u | wc -l) -eq 4 ]; then
-			break
-		fi
-	done
-
-	echo \
-		jc $jc jmin $jmin jmax $jmax \
-		s1 $s1 s2 $s2 s3 $s3 s4 $s4 \
-		h1 $h1 h2 $h2 h3 $h3 h4 $h4
-}
+. "$(atf_get_srcdir)/awg.subr"
 
 atf_test_case "wg_basic" "cleanup"
 wg_basic_head()
@@ -66,42 +40,30 @@ wg_basic_head()
 
 wg_basic_body()
 {
-	local epair pri1 pri2 pub1 pub2 wg1 wg2
-		local endpoint1 endpoint2 tunnel1 tunnel2
-
-	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
+	local pri1 pri2 pub1 pub2 wg1 wg2
+	local endpoint1 endpoint2 tunnel1 tunnel2
 
 	pri1=$(wg genkey)
 	pri2=$(wg genkey)
 
-	endpoint1=192.168.2.1
-	endpoint2=192.168.2.2
 	tunnel1=169.254.0.1
 	tunnel2=169.254.0.2
+	endpoint1=192.168.2.1
+	endpoint2=192.168.2.2
 
-	jail -r wgtest1 2> /dev/null || true
-	jail -r wgtest2 2> /dev/null || true
-
-	epair=$(vnet_mkepair)
-
-	vnet_init
-
-	vnet_mkjail wgtest1 ${epair}a
-	vnet_mkjail wgtest2 ${epair}b
+	setup_vnet_jails $endpoint1 $endpoint2
+	setup_debug
 
 	awg_cfg=$(awg_config)
 
-	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
-	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
-
 	wg1=$(jexec wgtest1 ifconfig wg create debug name wg1)
-	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
-		private-key /dev/stdin
+	atf_check -s exit:0 -o ignore -x "echo $pri1 |" \
+		jexec wgtest1 wg set $wg1 listen-port 12345 private-key /dev/stdin
 	pub1=$(jexec wgtest1 wg show $wg1 public-key)
 
 	wg2=$(jexec wgtest2 ifconfig wg create name wg2 debug)
-	echo "$pri2" | jexec wgtest2 wg set $wg2 listen-port 12345 \
-		private-key /dev/stdin
+	atf_check -s exit:0 -o ignore -x "echo $pri2 |" \
+		jexec wgtest2 wg set $wg2 listen-port 12345 private-key /dev/stdin
 	pub2=$(jexec wgtest2 wg show $wg2 public-key)
 
 	atf_check -s exit:0 -o ignore \
