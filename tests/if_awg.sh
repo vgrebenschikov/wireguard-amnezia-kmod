@@ -663,6 +663,93 @@ wg_allowedip_incremental_stealing_cleanup()
 	vnet_cleanup
 }
 
+atf_test_case "awg_long_wait" "cleanup"
+awg_long_wait_head()
+{
+	atf_set descr 'Send traffic with delay to check how it awakes after a while'
+	atf_set require.user root
+}
+
+awg_long_wait_body()
+{
+	local pri1 pri2 pub1 pub2 wg1 wg2
+	local endpoint1 endpoint2 tunnel1 tunnel2
+
+	pri1=$(wg genkey)
+	pri2=$(wg genkey)
+
+	tunnel1=169.254.0.1
+	tunnel2=169.254.0.2
+	endpoint1=192.168.2.1
+	endpoint2=192.168.2.2
+
+	setup_vnet_jails $endpoint1 $endpoint2
+	setup_debug
+
+	awg_cfg=$(awg_config)
+
+	wg1=$(jexec wgtest1 ifconfig wg create debug name wg1)
+	atf_check -s exit:0 -o ignore -x "echo $pri1 |" \
+		jexec wgtest1 wg set $wg1 listen-port 12345 private-key /dev/stdin
+	pub1=$(jexec wgtest1 wg show $wg1 public-key)
+
+	wg2=$(jexec wgtest2 ifconfig wg create name wg2 debug)
+	atf_check -s exit:0 -o ignore -x "echo $pri2 |" \
+		jexec wgtest2 wg set $wg2 listen-port 12345 private-key /dev/stdin
+	pub2=$(jexec wgtest2 wg show $wg2 public-key)
+
+	atf_check -s exit:0 -o ignore \
+		jexec wgtest1 wg set $wg1 peer "$pub2" \
+		endpoint ${endpoint2}:12345 allowed-ips ${tunnel2}/32
+	atf_check -s exit:0 -o ignore \
+		jexec wgtest1 awg set $wg1 $awg_cfg
+	atf_check -s exit:0 \
+		jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up
+
+	atf_check -s exit:0 -o ignore \
+		jexec wgtest2 wg set $wg2 peer "$pub1" \
+		endpoint ${endpoint1}:12345 allowed-ips ${tunnel1}/32
+	atf_check -s exit:0 -o ignore \
+		jexec wgtest2 awg set $wg2 $awg_cfg
+	atf_check -s exit:0 \
+		jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up
+
+	# Generous timeout since the handshake takes some time.
+	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 -t 5 $tunnel2
+	atf_check -s exit:0 -o ignore jexec wgtest2 ping -c 1 $tunnel1
+
+    for t in 20; do
+        echo "--[${t}s]------------------------------"
+
+        # check if there are no traffic over tunnel - there are no handshakes
+        atf_check -s exit:0 -o ignore sleep $t
+        atf_check -s exit:0 -o save:handshakes.txt jexec wgtest1 wg show $wg1 latest-handshakes
+
+        read _ handshake < handshakes.txt
+        now=$(date +%s)
+        echo "time since last handshake: $((now - handshake)) seconds"
+        atf_check -s exit:0 -o ignore [ "$handshake" -lt $((now - $t + 1)) ]
+
+        # check, that then we can communicate over tunnel
+        atf_check -s exit:0 -o ignore jexec wgtest2 ping -c 1 $tunnel1
+
+        atf_check -s exit:0 -o ignore sleep $t
+        atf_check -s exit:0 -o save:handshakes.txt jexec wgtest1 wg show $wg1 latest-handshakes
+
+        read _ handshake < handshakes.txt
+        now=$(date +%s)
+        echo "time since last handshake: $((now - handshake)) seconds"
+        atf_check -s exit:0 -o ignore [ "$handshake" -lt $((now - $t + 1)) ]
+
+        atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 $tunnel2
+    done
+}
+
+awg_long_wait_cleanup()
+{
+	vnet_cleanup
+}
+
 atf_init_test_cases()
 {
 	atf_add_test_case "wg_basic"
@@ -674,4 +761,5 @@ atf_init_test_cases()
 	atf_add_test_case "wg_allowedip_incremental"
 	atf_add_test_case "wg_allowedip_incremental_inet6"
 	atf_add_test_case "wg_allowedip_incremental_stealing"
+	atf_add_test_case "awg_long_wait"
 }

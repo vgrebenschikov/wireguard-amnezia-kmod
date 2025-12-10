@@ -55,7 +55,7 @@ awg1_config() {
 }
 
 setup_vnet_jails() {
-	local endpoint1=$1 endpoint2=$2 
+	local endpoint1=$1 endpoint2=$2
 	local epair1 epair2
 
 	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"

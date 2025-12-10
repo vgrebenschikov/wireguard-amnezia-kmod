@@ -1905,7 +1905,8 @@ wg_deliver_out(struct wg_peer *peer)
 		wg_timers_event_any_authenticated_packet_sent(peer);
 		rc = wg_send(sc, &endpoint, m);
 		if (rc == 0) {
-			if (len > (sizeof(struct wg_pkt_data) + NOISE_AUTHTAG_LEN))
+			if (len > (sizeof(struct wg_pkt_data) + NOISE_AUTHTAG_LEN
+                       + sc->sc_socket.so_transport_packet_junk_size))
 				wg_timers_event_data_sent(peer);
 			counter_u64_add(peer->p_tx_bytes, len);
 		} else if (rc == EADDRNOTAVAIL) {
