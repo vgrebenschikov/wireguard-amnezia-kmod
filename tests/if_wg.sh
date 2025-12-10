@@ -29,6 +29,7 @@
 # SUCH DAMAGE.
 
 . "$(atf_get_srcdir)/vnet.subr"
+. "$(atf_get_srcdir)/awg.subr"
 
 atf_test_case "wg_basic" "cleanup"
 wg_basic_head()
@@ -62,8 +63,10 @@ wg_basic_body()
 	vnet_mkjail wgtest1 ${epair}a
 	vnet_mkjail wgtest2 ${epair}b
 
-	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
-	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
+	setup_debug
+
+	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up debug
+	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up debug
 
 	wg1=$(jexec wgtest1 ifconfig wg create name wg1)
 	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \

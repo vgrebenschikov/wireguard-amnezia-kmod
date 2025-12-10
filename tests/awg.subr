@@ -1,3 +1,14 @@
+hp() {
+	local max32bit=4294967295
+	local h=$(jot -r 1 5 $max32bit)
+	local d=$(jot -r 1 0 20)
+	hm=$((h + d))
+	if [ $hm -gt $max32bit ]; then
+		hm=$max32bit
+	fi
+	echo "$h-$hm"
+}
+
 # Actual confiruration parameters for AWG (AWG2)
 awg_config() {
 	for i in 1 2 3 4; do
@@ -10,10 +21,10 @@ awg_config() {
 		s3=$(jot -r 1 15 100)
 		s4=$(jot -r 1 15 60)
 
-		h1=$(jot -r 1 5 4294967295)
-		h2=$(jot -r 1 5 4294967295)
-		h3=$(jot -r 1 5 4294967295)
-		h4=$(jot -r 1 5 4294967295)
+		h1=$(hp)
+		h2=$(hp)
+		h3=$(hp)
+		h4=$(hp)
 
 		if [ $(($s1 + 56)) -ne $s2 ] && \
 		   [ $(echo -e "$h1\n$h2\n$h3\n$h4" | sort -u | wc -l) -eq 4 ]; then
@@ -21,10 +32,12 @@ awg_config() {
 		fi
 	done
 
-	echo \
-		jc $jc jmin $jmin jmax $jmax \
-		s1 $s1 s2 $s2 s3 $s3 s4 $s4 \
-		h1 $h1 h2 $h2 h3 $h3 h4 $h4
+	cfg="jc $jc jmin $jmin jmax $jmax
+		s1 $s1 s2 $s2 s3 $s3 s4 $s4
+		h1 $h1 h2 $h2 h3 $h3 h4 $h4"
+
+	echo $cfg
+	echo $cfg >&2/dev/stderr
 }
 
 # Compatibility confiruration parameters for AWG (AWG1)

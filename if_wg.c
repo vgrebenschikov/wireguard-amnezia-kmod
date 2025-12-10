@@ -71,14 +71,33 @@
 #define DPRINTF(sc, ...) if (if_getflags(sc->sc_ifp) & IFF_DEBUG) if_printf(sc->sc_ifp, ##__VA_ARGS__)
 
 /* First byte indicating packet type on the wire */
-#define WG_PKT_X_DEFAULT(x, y) ((x) ? (x) : (y))
 
-#define WG_PKT_INITIATION(sc)	WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_initiation.min, htole32(1))
-#define WG_PKT_RESPONSE(sc)		WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_response.min, htole32(2))
-#define WG_PKT_COOKIE(sc)		WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_cookie.min, htole32(3))
-#define WG_PKT_DATA(sc)			WG_PKT_X_DEFAULT(sc->sc_socket.so_pkt_data.min, htole32(4))
+#define WG_PKT_INITIATION	htole32(1)
+#define WG_PKT_RESPONSE		htole32(2)
+#define WG_PKT_COOKIE		htole32(3)
+#define WG_PKT_DATA			htole32(4)
 
-#define WG_PKT_DEFAULT_MAX	htole32(4)
+#define WG_PKT_DEFAULT_MAX	WG_PKT_DATA
+
+#define WG_PKT_INITIATION_HEADER			so_pkt_initiation
+#define WG_PKT_RESPONSE_HEADER				so_pkt_response
+#define WG_PKT_COOKIE_HEADER				so_pkt_cookie
+#define WG_PKT_DATA_HEADER					so_pkt_data
+
+#define WG_PKT_HDR_MATCH(hdr, val, def)	( \
+		(hdr).min ? \
+			( (hdr).min <= (val) && (hdr).max >= (val) ? (def) : 0) : \
+			( (val) == (def) ? (def) : 0 ) \
+		)
+
+#define WG_PKT_HDR_GENERATE(sc, typ)		wg_pkt_type_gen(WG_PKT_##typ, sc->sc_socket.WG_PKT_##typ##_HEADER)
+#define WG_PKT_HDR_MATCH_SC(sc, val, typ)	WG_PKT_HDR_MATCH(sc->sc_socket.WG_PKT_##typ##_HEADER, val, WG_PKT_##typ)
+
+#define WG_PKT_INITIATION_MATCH(sc, val)	WG_PKT_HDR_MATCH_SC(sc, val, INITIATION)
+#define WG_PKT_RESPONSE_MATCH(sc, val)		WG_PKT_HDR_MATCH_SC(sc, val, RESPONSE)
+#define WG_PKT_COOKIE_MATCH(sc, val)		WG_PKT_HDR_MATCH_SC(sc, val, COOKIE)
+#define WG_PKT_DATA_MATCH(sc, val)			WG_PKT_HDR_MATCH_SC(sc, val, DATA)
+
 
 #define WG_PKT_PADDING		16
 #define WG_KEY_SIZE		32
@@ -1433,6 +1452,19 @@ wg_send_junk_packets(struct wg_peer *peer)
 	}
 }
 
+
+static uint32_t
+wg_pkt_type_gen(uint32_t pkt_type, wg_hdr_pair hdr)
+{
+	if (hdr.min == 0)
+		return pkt_type;
+
+	if (hdr.min == hdr.max)
+		return hdr.min;
+
+	return hdr.min + arc4random_uniform(hdr.max - hdr.min + 1);
+}
+
 static void
 wg_send_initiation(struct wg_peer *peer)
 {
@@ -1448,7 +1480,7 @@ wg_send_initiation(struct wg_peer *peer)
 
 	DPRINTF(sc, "Sending handshake initiation to peer %" PRIu64 "\n", peer->p_id);
 
-	pkt.t = WG_PKT_INITIATION(sc);
+	pkt.t = WG_PKT_HDR_GENERATE(sc, INITIATION);
 	cookie_maker_mac(&peer->p_cookie, &pkt.m, &pkt,
 		sizeof(pkt) - sizeof(pkt.m));
 	wg_peer_send_buf_junk(peer, (uint8_t *)&pkt, sizeof(pkt),
@@ -1468,7 +1500,7 @@ wg_send_response(struct wg_peer *peer)
 	DPRINTF(peer->p_sc, "Sending handshake response to peer %" PRIu64 "\n", peer->p_id);
 
 	wg_timers_event_session_derived(peer);
-	pkt.t = WG_PKT_RESPONSE(peer->p_sc);
+	pkt.t = WG_PKT_HDR_GENERATE(peer->p_sc, RESPONSE);
 	cookie_maker_mac(&peer->p_cookie, &pkt.m, &pkt,
 		 sizeof(pkt)-sizeof(pkt.m));
 	wg_peer_send_buf_junk(peer, (uint8_t*)&pkt, sizeof(pkt),
@@ -1483,7 +1515,7 @@ wg_send_cookie(struct wg_softc *sc, struct cookie_macs *cm, uint32_t idx,
 
 	DPRINTF(sc, "Sending cookie response for denied handshake message\n");
 
-	pkt.t = WG_PKT_COOKIE(sc);
+	pkt.t = WG_PKT_HDR_GENERATE(sc, COOKIE);
 	pkt.r_idx = idx;
 
 	cookie_checker_create_payload(&sc->sc_cookie, cm, pkt.nonce,
@@ -1543,7 +1575,7 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 		goto error;
 
 	uint32_t t = *mtod(m, uint32_t *);
-	if ( t == WG_PKT_INITIATION(sc)) {
+	if (WG_PKT_INITIATION_MATCH(sc, t)) {
 		init = mtod(m, struct wg_pkt_initiation *);
 
 		res = cookie_checker_validate_macs(&sc->sc_cookie, &init->m,
@@ -1576,7 +1608,7 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 
 		wg_peer_set_endpoint(peer, e);
 		wg_send_response(peer);
-	} else if (t == WG_PKT_RESPONSE(sc)) {
+	} else if (WG_PKT_RESPONSE_MATCH(sc, t)) {
 		resp = mtod(m, struct wg_pkt_response *);
 
 		res = cookie_checker_validate_macs(&sc->sc_cookie, &resp->m,
@@ -1609,7 +1641,7 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 		wg_peer_set_endpoint(peer, e);
 		wg_timers_event_session_derived(peer);
 		wg_timers_event_handshake_complete(peer);
-	} else if (t == WG_PKT_COOKIE(sc)) {
+	} else if (WG_PKT_COOKIE_MATCH(sc, t)) {
 		cook = mtod(m, struct wg_pkt_cookie *);
 
 		if ((remote = noise_remote_index(sc->sc_local, cook->r_idx)) == NULL) {
@@ -1746,7 +1778,7 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	if (m == NULL)
 		goto out;
 	data = mtod(m, struct wg_pkt_data *);
-	data->t = WG_PKT_DATA(sc);
+	data->t = WG_PKT_HDR_GENERATE(sc, DATA);
 	data->r_idx = idx;
 	data->nonce = htole64(pkt->p_nonce);
 
@@ -2199,7 +2231,12 @@ wg_queue_dequeue_parallel(struct wg_queue *parallel)
 }
 
 static uint32_t
-wg_match_pkt_skipping_junk(struct mbuf **mptr, size_t junk_size, uint32_t pkt_type, size_t header_size)
+wg_match_pkt_skipping_junk(
+	struct mbuf **mptr,
+	size_t 		junk_size,
+	uint32_t	expected,
+	wg_hdr_pair hdr,
+	size_t		header_size)
 {
 	size_t req_size = junk_size + sizeof(uint32_t);
 
@@ -2219,15 +2256,16 @@ wg_match_pkt_skipping_junk(struct mbuf **mptr, size_t junk_size, uint32_t pkt_ty
 	}
 
 	/* check packet type */
-	if (*(uint32_t *)mtodo(*mptr, junk_size) != pkt_type) {
+	uint32_t t = *(uint32_t *)mtodo(*mptr, junk_size);
+	if (!WG_PKT_HDR_MATCH(hdr, t, expected))
 		return 0;
-	}
+
 
 	/* skip junk only once we identified packet type */
 	if (junk_size > 0)
 		m_adj(*mptr, junk_size);
 
-	return pkt_type;
+	return expected;
 }
 
 
@@ -2241,7 +2279,8 @@ wg_match_input_skipping_junk(struct mbuf **mptr, struct wg_softc *sc)
 		matched = wg_match_pkt_skipping_junk(
 			mptr,
 			sc->sc_socket.so_init_packet_junk_size,
-			WG_PKT_INITIATION(sc),
+			WG_PKT_INITIATION,
+			sc->sc_socket.so_pkt_initiation,
 #ifndef AWG2_JUNK_AFTER_HANDSHAKE
 			sizeof(struct wg_pkt_initiation)
 #else
@@ -2255,7 +2294,8 @@ wg_match_input_skipping_junk(struct mbuf **mptr, struct wg_softc *sc)
 		matched = wg_match_pkt_skipping_junk(
 			mptr,
 			sc->sc_socket.so_response_packet_junk_size,
-			WG_PKT_RESPONSE(sc),
+			WG_PKT_RESPONSE,
+			sc->sc_socket.so_pkt_response,
 #ifndef AWG2_JUNK_AFTER_HANDSHAKE
 			sizeof(struct wg_pkt_response)
 #else
@@ -2269,7 +2309,8 @@ wg_match_input_skipping_junk(struct mbuf **mptr, struct wg_softc *sc)
 		matched = wg_match_pkt_skipping_junk(
 			mptr,
 			sc->sc_socket.so_cookie_packet_junk_size,
-			WG_PKT_COOKIE(sc),
+			WG_PKT_COOKIE,
+			sc->sc_socket.so_pkt_cookie,
 #ifndef AWG2_JUNK_AFTER_HANDSHAKE
 			sizeof(struct wg_pkt_cookie)
 #else
@@ -2283,7 +2324,8 @@ wg_match_input_skipping_junk(struct mbuf **mptr, struct wg_softc *sc)
 		matched = wg_match_pkt_skipping_junk(
 			mptr,
 			sc->sc_socket.so_transport_packet_junk_size,
-			WG_PKT_DATA(sc),
+			WG_PKT_DATA,
+			sc->sc_socket.so_pkt_data,
 			0
 		);
 	}
@@ -2353,9 +2395,9 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 		goto error;
 	}
 
-	if (pkt_type == WG_PKT_INITIATION(sc) ||
-		pkt_type == WG_PKT_RESPONSE(sc) ||
-		pkt_type == WG_PKT_COOKIE(sc)) {
+	if (pkt_type == WG_PKT_INITIATION ||
+		pkt_type == WG_PKT_RESPONSE ||
+		pkt_type == WG_PKT_COOKIE) {
 
 		if (wg_queue_enqueue_handshake(&sc->sc_handshake_queue, pkt) != 0) {
 			if_inc_counter(sc->sc_ifp, IFCOUNTER_IQDROPS, 1);
@@ -2363,7 +2405,7 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 		}
 		GROUPTASK_ENQUEUE(&sc->sc_handshake);
 	} else if (m->m_pkthdr.len >= sizeof(struct wg_pkt_data) +
-		NOISE_AUTHTAG_LEN && pkt_type == WG_PKT_DATA(sc)) {
+		NOISE_AUTHTAG_LEN && pkt_type == WG_PKT_DATA) {
 
 		/* Pullup whole header to read r_idx below. */
 		if ((pkt->p_mbuf = m_pullup(m, sizeof(struct wg_pkt_data))) == NULL)
