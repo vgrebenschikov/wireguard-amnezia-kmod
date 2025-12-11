@@ -264,7 +264,7 @@ struct wg_amnezia {
 	uint32_t	am_junk_packet_max_size;		// Jmax
 	uint32_t	am_s[4];						// Sx
 	wg_hdr_pair	am_h[4];						// Hx
-	char		am_i[5][256];					// Ix
+	char	   *am_i[5];						// Ix
 };
 
 struct wg_socket {
@@ -3112,8 +3112,23 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		if (nvlist_exists_binary(nvl, name)) {
 			size_t size;
 			const char *value = nvlist_get_binary(nvl, name, &size);
-			if (value != NULL && size > 0 && value[size - 1] == '\0') {
+			if (value != NULL && size > 0 && value[size - 1] == '\0' && size < 2 * ETHERMTU) {
+				if (sc->sc_amnezia.am_i[i]) {
+					zfree(sc->sc_amnezia.am_i[i], M_WG);
+					sc->sc_amnezia.am_i[i] = NULL;
+				}
+
+				sc->sc_amnezia.am_i[i] = malloc(size + 1, M_WG, M_WAITOK | M_ZERO);
+				if (sc->sc_amnezia.am_i[i] == NULL) {
+					err = ENOMEM;
+					goto out_locked;
+				}
+
 				strlcpy(sc->sc_amnezia.am_i[i], value, size);
+			} else {
+				DPRINTF(sc, "%s: value is not a valid string or too large\n", name);
+				err = EINVAL;
+				goto out_locked;
 			}
 		}
 	}
@@ -3521,7 +3536,7 @@ wg_clone_create(struct if_clone *ifc, char *name, size_t len,
 		sc->sc_amnezia.am_h[i] = (wg_hdr_pair){ .min = 0, .max = 0 };
 	}
 	for (int i = 0; i < AWG_Ix; i++) {
-		sc->sc_amnezia.am_i[i][0] = '\0';
+		sc->sc_amnezia.am_i[i] = NULL;
 	}
 
 	TAILQ_INIT(&sc->sc_peers);
@@ -3651,6 +3666,13 @@ wg_clone_destroy(struct if_clone *ifc, if_t ifp, uint32_t flags)
 	rn_detachhead((void **)&sc->sc_aip6);
 
 	cookie_checker_free(&sc->sc_cookie);
+
+
+	for (int i = 0; i < AWG_Ix; i++)
+		if (sc->sc_amnezia.am_i[i]) {
+			zfree(sc->sc_amnezia.am_i[i], M_WG);
+			sc->sc_amnezia.am_i[i] = NULL;
+		}
 
 	if (cred != NULL)
 		crfree(cred);
