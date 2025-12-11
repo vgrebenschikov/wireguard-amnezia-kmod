@@ -79,10 +79,29 @@
 
 #define WG_PKT_DEFAULT_MAX	WG_PKT_DATA
 
-#define WG_PKT_INITIATION_HEADER			so_pkt_initiation
-#define WG_PKT_RESPONSE_HEADER				so_pkt_response
-#define WG_PKT_COOKIE_HEADER				so_pkt_cookie
-#define WG_PKT_DATA_HEADER					so_pkt_data
+#define AWG_S1 0
+#define AWG_S2 1
+#define AWG_S3 2
+#define AWG_S4 3
+#define AWG_Sx 4
+
+#define AWG_H1 0
+#define AWG_H2 1
+#define AWG_H3 2
+#define AWG_H4 3
+#define AWG_Hx 4
+
+#define AWG_I1 0
+#define AWG_I2 1
+#define AWG_I3 2
+#define AWG_I4 3
+#define AWG_I5 4
+#define AWG_Ix 5
+
+#define WG_PKT_INITIATION_HEADER			am_h[AWG_H1]
+#define WG_PKT_RESPONSE_HEADER				am_h[AWG_H2]
+#define WG_PKT_COOKIE_HEADER				am_h[AWG_H3]
+#define WG_PKT_DATA_HEADER					am_h[AWG_H4]
 
 #define WG_PKT_HDR_MATCH(hdr, val, def)	( \
 		(hdr).min ? \
@@ -90,8 +109,8 @@
 			( (val) == (def) ? (def) : 0 ) \
 		)
 
-#define WG_PKT_HDR_GENERATE(sc, typ)		wg_pkt_type_gen(WG_PKT_##typ, sc->sc_socket.WG_PKT_##typ##_HEADER)
-#define WG_PKT_HDR_MATCH_SC(sc, val, typ)	WG_PKT_HDR_MATCH(sc->sc_socket.WG_PKT_##typ##_HEADER, val, WG_PKT_##typ)
+#define WG_PKT_HDR_GENERATE(sc, typ)		wg_pkt_type_gen(WG_PKT_##typ, sc->sc_amnezia.WG_PKT_##typ##_HEADER)
+#define WG_PKT_HDR_MATCH_SC(sc, val, typ)	WG_PKT_HDR_MATCH(sc->sc_amnezia.WG_PKT_##typ##_HEADER, val, WG_PKT_##typ)
 
 #define WG_PKT_INITIATION_MATCH(sc, val)	WG_PKT_HDR_MATCH_SC(sc, val, INITIATION)
 #define WG_PKT_RESPONSE_MATCH(sc, val)		WG_PKT_HDR_MATCH_SC(sc, val, RESPONSE)
@@ -239,24 +258,21 @@ struct wg_header_pair {
 };
 typedef struct wg_header_pair wg_hdr_pair;
 
+struct wg_amnezia {
+	uint32_t	am_junk_packet_count;			// Jc
+	uint32_t	am_junk_packet_min_size;		// Jmin
+	uint32_t	am_junk_packet_max_size;		// Jmax
+	uint32_t	am_s[4];						// Sx
+	wg_hdr_pair	am_h[4];						// Hx
+	char		am_i[5][256];					// Ix
+};
+
 struct wg_socket {
 	struct socket	*so_so4;
 	struct socket	*so_so6;
 	uint32_t	 so_user_cookie;
 	int		 so_fibnum;
 	in_port_t	 so_port;
-
-	uint32_t	so_junk_packet_count;			// Jc
-	uint32_t	so_junk_packet_min_size;		// Jmin
-	uint32_t	so_junk_packet_max_size;		// Jmax
-	uint32_t	so_init_packet_junk_size;		// S1
-	uint32_t	so_response_packet_junk_size;	// S2
-	uint32_t	so_cookie_packet_junk_size;		// S3
-	uint32_t	so_transport_packet_junk_size;	// S4
-	wg_hdr_pair	so_pkt_initiation;				// H1
-	wg_hdr_pair so_pkt_response;				// H2
-	wg_hdr_pair so_pkt_cookie;					// H3
-	wg_hdr_pair so_pkt_data;					// H4
 };
 
 struct wg_softc {
@@ -266,6 +282,7 @@ struct wg_softc {
 
 	struct ucred		*sc_ucred;
 	struct wg_socket	 sc_socket;
+	struct wg_amnezia	 sc_amnezia;
 
 	TAILQ_HEAD(,wg_peer)	 sc_peers;
 	size_t			 sc_peers_num;
@@ -325,6 +342,16 @@ VNET_DEFINE_STATIC(struct if_clone *, wg_cloner);
 struct wg_timespec64 {
 	uint64_t	tv_sec;
 	uint64_t	tv_nsec;
+};
+
+static struct {
+	size_t ams_sz;
+	uint32_t ams_type;
+} amnezia_structureres[] = {
+	{ sizeof(struct wg_pkt_initiation), WG_PKT_INITIATION },
+	{ sizeof(struct wg_pkt_response), 	WG_PKT_RESPONSE },
+	{ sizeof(struct wg_pkt_cookie), 	WG_PKT_COOKIE },
+	{ sizeof(struct wg_pkt_data), 		WG_PKT_DATA },
 };
 
 static int wg_socket_init(struct wg_softc *, in_port_t);
@@ -1398,7 +1425,7 @@ wg_peer_send_buf_junk(struct wg_peer *peer, uint8_t *buf, size_t len, size_t jun
 
 	/* if AWG2 - send post-junk data */
 	int mtu = if_getmtu(sc->sc_ifp);
-	if ((sc->sc_socket.so_cookie_packet_junk_size || sc->sc_socket.so_transport_packet_junk_size)
+	if ((sc->sc_amnezia.am_s[AWG_S3] || sc->sc_amnezia.am_s[AWG_S4])
 		&& mtu > total_len) {
 		size_t post_junk_len_max = min(mtu - total_len, junk_len);
 		post_junk_len = arc4random_uniform((u_int32_t)post_junk_len_max) + 1;
@@ -1432,11 +1459,11 @@ wg_send_junk_packets(struct wg_peer *peer)
 	size_t size;
 	int i;
 
-	for (i = 0; i < sc->sc_socket.so_junk_packet_count; i++) {
+	for (i = 0; i < sc->sc_amnezia.am_junk_packet_count; i++) {
 		/* Generate random size between min and max */
-		size = arc4random_uniform(sc->sc_socket.so_junk_packet_max_size -
-			sc->sc_socket.so_junk_packet_min_size + 1) +
-			sc->sc_socket.so_junk_packet_min_size;
+		size = arc4random_uniform(sc->sc_amnezia.am_junk_packet_max_size -
+			sc->sc_amnezia.am_junk_packet_min_size + 1) +
+			sc->sc_amnezia.am_junk_packet_min_size;
 
 		buf = malloc(size, M_DEVBUF, M_NOWAIT);
 		if (buf == NULL)
@@ -1484,7 +1511,7 @@ wg_send_initiation(struct wg_peer *peer)
 	cookie_maker_mac(&peer->p_cookie, &pkt.m, &pkt,
 		sizeof(pkt) - sizeof(pkt.m));
 	wg_peer_send_buf_junk(peer, (uint8_t *)&pkt, sizeof(pkt),
-		sc->sc_socket.so_init_packet_junk_size);
+		sc->sc_amnezia.am_s[AWG_S1]);
 	wg_timers_event_handshake_initiated(peer);
 }
 
@@ -1504,7 +1531,7 @@ wg_send_response(struct wg_peer *peer)
 	cookie_maker_mac(&peer->p_cookie, &pkt.m, &pkt,
 		 sizeof(pkt)-sizeof(pkt.m));
 	wg_peer_send_buf_junk(peer, (uint8_t*)&pkt, sizeof(pkt),
-		peer->p_sc->sc_socket.so_response_packet_junk_size);
+		peer->p_sc->sc_amnezia.am_s[AWG_S2]);
 }
 
 static void
@@ -1522,7 +1549,7 @@ wg_send_cookie(struct wg_softc *sc, struct cookie_macs *cm, uint32_t idx,
 		pkt.ec, &e->e_remote.r_sa);
 
 	wg_send_buf_junk(sc, e, (uint8_t *)&pkt, sizeof(pkt),
-		sc->sc_socket.so_cookie_packet_junk_size);
+		sc->sc_amnezia.am_s[AWG_S3]);
 }
 
 static void
@@ -1783,9 +1810,8 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	data->nonce = htole64(pkt->p_nonce);
 
 	/* Add junk data if S4 is configured (before header) */
-	if (sc->sc_socket.so_transport_packet_junk_size > 0) {
-		size_t junk_size = sc->sc_socket.so_transport_packet_junk_size;
-
+	size_t junk_size = sc->sc_amnezia.am_s[AWG_S4];
+	if (junk_size > 0) {
 		M_PREPEND(m, junk_size, M_NOWAIT);
 		if (m == NULL)
 			goto out;
@@ -1938,7 +1964,7 @@ wg_deliver_out(struct wg_peer *peer)
 		rc = wg_send(sc, &endpoint, m);
 		if (rc == 0) {
 			if (len > (sizeof(struct wg_pkt_data) + NOISE_AUTHTAG_LEN
-					   + sc->sc_socket.so_transport_packet_junk_size))
+					   + sc->sc_amnezia.am_s[AWG_S4]))
 				wg_timers_event_data_sent(peer);
 			counter_u64_add(peer->p_tx_bytes, len);
 		} else if (rc == EADDRNOTAVAIL) {
@@ -2274,59 +2300,17 @@ wg_match_input_skipping_junk(struct mbuf **mptr, struct wg_softc *sc)
 {
 	uint32_t matched = 0;
 
-	/* Check if this is a initiation packet with junk */
-	if (*mptr && !matched) {
+	for (size_t i = 0; *mptr && !matched && i < AWG_Hx; i++) {
 		matched = wg_match_pkt_skipping_junk(
 			mptr,
-			sc->sc_socket.so_init_packet_junk_size,
-			WG_PKT_INITIATION,
-			sc->sc_socket.so_pkt_initiation,
+			sc->sc_amnezia.am_s[i],
+			amnezia_structureres[i].ams_type,
+			sc->sc_amnezia.am_h[i],
 #ifndef AWG2_JUNK_AFTER_HANDSHAKE
-			sizeof(struct wg_pkt_initiation)
+			i != AWG_S4 ? amnezia_structureres[i].ams_sz : 0
 #else
 			0
 #endif
-		);
-	}
-
-	/* Check if this is a response packet with junk */
-	if (*mptr && !matched) {
-		matched = wg_match_pkt_skipping_junk(
-			mptr,
-			sc->sc_socket.so_response_packet_junk_size,
-			WG_PKT_RESPONSE,
-			sc->sc_socket.so_pkt_response,
-#ifndef AWG2_JUNK_AFTER_HANDSHAKE
-			sizeof(struct wg_pkt_response)
-#else
-			0
-#endif
-		);
-	}
-
-	/* Check if this is a cookie packet with junk */
-	if (*mptr && !matched) {
-		matched = wg_match_pkt_skipping_junk(
-			mptr,
-			sc->sc_socket.so_cookie_packet_junk_size,
-			WG_PKT_COOKIE,
-			sc->sc_socket.so_pkt_cookie,
-#ifndef AWG2_JUNK_AFTER_HANDSHAKE
-			sizeof(struct wg_pkt_cookie)
-#else
-			0
-#endif
-		);
-	}
-
-	/* Check if this is a data packet with junk */
-	if (*mptr && !matched) {
-		matched = wg_match_pkt_skipping_junk(
-			mptr,
-			sc->sc_socket.so_transport_packet_junk_size,
-			WG_PKT_DATA,
-			sc->sc_socket.so_pkt_data,
-			0
 		);
 	}
 
@@ -2889,7 +2873,7 @@ out:
 
 /* check if MTU matches s4, return new MTU if it does not */
 static size_t
-wg_check_mtu_s4(struct wg_softc *sc, size_t ifmtu, size_t s4)
+wg_check_mtu_s4(struct wg_softc *sc, size_t ifmtu, uint32_t s4)
 {
 	size_t ip_header_size = sizeof(struct ip);
 #ifdef INET6
@@ -2907,7 +2891,7 @@ wg_check_mtu_s4(struct wg_softc *sc, size_t ifmtu, size_t s4)
 		size_t new_mtu = ETHERMTU - ip_header_size - sizeof(struct udphdr) - s4 - sizeof(struct wg_pkt_data);
 		new_mtu = new_mtu & ~padding_mask;
 
-		DPRINTF(sc, "MTU is too big %zu tunnel packet may be %zu with s4=%zu, suggested MTU is %zu\n",
+		DPRINTF(sc, "MTU is too big %zu tunnel packet may be %zu with s4=%d, suggested MTU is %zu\n",
 			ifmtu, max_pkt_size, s4, new_mtu);
 
 		return new_mtu;
@@ -2925,21 +2909,6 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	nvlist_t *nvl;
 	ssize_t size;
 	int err;
-	uint64_t s1 = 0, s2 = 0;
-
-	struct {
-		const char *name;
-		wg_hdr_pair *header;
-		wg_hdr_pair value;
-		bool changed;
-	} hparams[] = {
-		{"h1", &sc->sc_socket.so_pkt_initiation, {0, 0}, false},
-		{"h2", &sc->sc_socket.so_pkt_response, {0, 0}, false},
-		{"h3", &sc->sc_socket.so_pkt_cookie, {0, 0}, false},
-		{"h4", &sc->sc_socket.so_pkt_data, {0, 0}, false},
-	};
-	size_t hparams_count = sizeof(hparams) / sizeof(hparams[0]);
-
 
 	ifp = sc->sc_ifp;
 	if (wgd->wgd_size == 0 || wgd->wgd_data == NULL)
@@ -2979,92 +2948,89 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		}
 	}
 	if (nvlist_exists_number(nvl, "jc")) {
-		uint64_t jc = nvlist_get_number(nvl, "jc");
+		uint32_t jc = nvlist_get_number(nvl, "jc");
 		if (jc > UINT8_MAX) {
-			DPRINTF(sc, "jc=%" PRIu64 " is too large\n", jc);
+			DPRINTF(sc, "jc=%" PRIu32 " is too large\n", jc);
 			err = EINVAL;
 			goto out_locked;
 		}
-		sc->sc_socket.so_junk_packet_count = jc;
+		sc->sc_amnezia.am_junk_packet_count = jc;
 	}
 	if (nvlist_exists_number(nvl, "jmin")) {
-		uint64_t jmin = nvlist_get_number(nvl, "jmin");
+		uint32_t jmin = nvlist_get_number(nvl, "jmin");
 		if (jmin > 1200) {
-			DPRINTF(sc, "jmin=%" PRIu64 " is too large, should be less than 1200\n", jmin);
+			DPRINTF(sc, "jmin=%" PRIu32 " is too large, should be less than 1200\n", jmin);
 			err = EINVAL;
 			goto out_locked;
 		}
-		sc->sc_socket.so_junk_packet_min_size = jmin;
+		sc->sc_amnezia.am_junk_packet_min_size = jmin;
 	}
 	if (nvlist_exists_number(nvl, "jmax")) {
-		uint64_t jmax = nvlist_get_number(nvl, "jmax");
-		if (jmax > 1280 || jmax <= sc->sc_socket.so_junk_packet_min_size) {
-			DPRINTF(sc, "jmax=%" PRIu64 " is too large, should be less than 1280 and greater than jmin\n", jmax);
+		uint32_t jmax = nvlist_get_number(nvl, "jmax");
+		if (jmax > 1280 || jmax <= sc->sc_amnezia.am_junk_packet_min_size) {
+			DPRINTF(sc, "jmax=%" PRIu32 " is too large, should be less than 1280 and greater than jmin\n", jmax);
 			err = EINVAL;
 			goto out_locked;
 		}
-		sc->sc_socket.so_junk_packet_max_size = jmax;
+		sc->sc_amnezia.am_junk_packet_max_size = jmax;
 	}
-	uint64_t s1size = sizeof(struct wg_pkt_initiation);
-	if (nvlist_exists_number(nvl, "s1")) {
-		s1 = nvlist_get_number(nvl, "s1");
-		if (s1 + s1size > 1280) {
-			DPRINTF(sc, "s1=%" PRIu64 " is too large, should be less than %" PRIu64 "\n", s1, (uint64_t)(1280 - s1size));
-			err = EINVAL;
-			goto out_locked;
+
+	uint32_t sx[AWG_Sx] = {0};
+	for (int i = 0; i < AWG_Sx; i++) {
+		sx[i] = sc->sc_amnezia.am_s[i];
+	}
+
+	for (int i = 0; i < AWG_Sx; i++) {
+		char name[3] = { 's', '1' + i, '\0' };
+		if (nvlist_exists_number(nvl, name)) {
+			uint32_t s = nvlist_get_number(nvl, name);
+			if (s + amnezia_structureres[i].ams_sz > 1280) {
+				DPRINTF(sc, "%s=%" PRIu32 " is too large, should be less than %" PRIu32 "\n", 
+						name, s, (uint32_t)(1280 - amnezia_structureres[i].ams_sz));
+
+				err = EINVAL;
+				goto out_locked;
+			}
+			sx[i] = s;
 		}
-		sc->sc_socket.so_init_packet_junk_size = s1;
 	}
-	uint64_t s2size = sizeof(struct wg_pkt_response);
-	if (nvlist_exists_number(nvl, "s2")) {
-		s2 = nvlist_get_number(nvl, "s2");
-		if (s2 + s2size > 1280) {
-			DPRINTF(sc, "s2=%" PRIu64 " is too large, should be less than %" PRIu64 "\n", s2, (uint64_t)(1280 - s2size));
-			err = EINVAL;
-			goto out_locked;
-		}
-		sc->sc_socket.so_response_packet_junk_size = s2;
-	}
-	if ((s1 || s2) && (s1 + s1size == s2 + s2size)) {
-		DPRINTF(sc, "s1 + %" PRIu64 " and s2 must be different\n", s1size - s2size);
+
+	uint32_t s1size = sx[AWG_S1] + amnezia_structureres[AWG_S1].ams_sz;
+	uint32_t s2size = sx[AWG_S2] + amnezia_structureres[AWG_S2].ams_sz;
+	if ((sx[AWG_S1] || sx[AWG_S2]) && (s1size == s2size)) {
+		DPRINTF(sc, "s1 + %" PRIu32 " and s2 must be different\n", s1size - s2size);
 		err = EINVAL;
 		goto out_locked;
 	}
-	if (nvlist_exists_number(nvl, "s3")) {
-		uint64_t s3 = nvlist_get_number(nvl, "s3");
-		uint64_t s3size = sizeof(struct wg_pkt_cookie);
-		if (s3 + s3size > 1280) {
-			DPRINTF(sc, "s3=%" PRIu64 " is too large, should be less than %" PRIu64 "\n", s3, (uint64_t)(1280 - s3size));
-			err = EINVAL;
-			goto out_locked;
-		}
-		sc->sc_socket.so_cookie_packet_junk_size = s3;
-	}
-	if (nvlist_exists_number(nvl, "s4")) {
-		uint64_t s4 = nvlist_get_number(nvl, "s4");
-		uint64_t s4size = sizeof(struct wg_pkt_data);
-		if (s4 + s4size > 1280) {
-			DPRINTF(sc, "s4=%" PRIu64 " is too large, should be less than %" PRIu64 "\n", s4, (uint64_t)(1280 - s4size));
-			err = EINVAL;
-			goto out_locked;
-		}
 
-		size_t new_mtu = wg_check_mtu_s4(sc, if_getmtu(ifp), s4);
+	if (sx[AWG_S4]) {
+		int new_mtu = wg_check_mtu_s4(sc, if_getmtu(ifp), sx[AWG_S4]);
 		if (new_mtu) {
 			if (new_mtu < ETHERMTU) {
-				DPRINTF(sc, "Setting MTU to %zu\n", new_mtu);
+				DPRINTF(sc, "Setting MTU to %d\n", new_mtu);
 				if_setmtu(ifp, new_mtu);
 			} else {
 				err = EINVAL;
 				goto out_locked;
 			}
 		}
-
-		sc->sc_socket.so_transport_packet_junk_size = s4;
 	}
 
-	for (int i = 0; i < hparams_count; i++) {
-		hparams[i].value = *hparams[i].header;
+	// assign Sx parameters
+	for (int i = 0; i < AWG_Sx; i++) {
+		sc->sc_amnezia.am_s[i] = sx[i];
+	}
+
+	struct {
+		char name[3];
+		wg_hdr_pair value;
+		bool changed;
+	} hparams[AWG_Hx];
+
+	for (int i = 0; i < AWG_Hx; i++) {
+		snprintf(hparams[i].name, 3, "h%d", 1 + i);
+		hparams[i].value = sc->sc_amnezia.am_h[i];
+		hparams[i].changed = false;
 
 		if (nvlist_exists_binary(nvl, hparams[i].name)) {
 			size_t size;
@@ -3097,7 +3063,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	}
 
 	// Check magic headers
-	for(int i = 0; i < hparams_count; i++) {
+	for(int i = 0; i < AWG_Hx; i++) {
 		if (hparams[i].value.min == 0) {
 			continue;
 		}
@@ -3134,12 +3100,23 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		}
 	}
 
-	// assign magic headers
-	for(int i = 0; i < hparams_count; i++) {
+	// assign Hx - magic headers
+	for(int i = 0; i < AWG_Hx; i++) {
 		if (hparams[i].changed)
-			*hparams[i].header = hparams[i].value;
+			sc->sc_amnezia.am_h[i] = hparams[i].value;
 	}
 
+	// assign Ix parameters
+	for (int i = 0; i < AWG_Ix; i++) {
+		char name[3] = { 'i', '1' + i, '\0' };
+		if (nvlist_exists_binary(nvl, name)) {
+			size_t size;
+			const char *value = nvlist_get_binary(nvl, name, &size);
+			if (value != NULL && size > 0 && value[size - 1] == '\0') {
+				strlcpy(sc->sc_amnezia.am_i[AWG_I5], value, size);
+			}
+		}
+	}
 
 	if (nvlist_exists_binary(nvl, "private-key")) {
 		const void *key = nvlist_get_binary(nvl, "private-key", &size);
@@ -3223,10 +3200,10 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 		const char *name;
 		wg_hdr_pair *header;
 	} hparams[] = {
-		{"h1", &sc->sc_socket.so_pkt_initiation},
-		{"h2", &sc->sc_socket.so_pkt_response},
-		{"h3", &sc->sc_socket.so_pkt_cookie},
-		{"h4", &sc->sc_socket.so_pkt_data},
+		{"h1", &sc->sc_amnezia.am_h[AWG_H1]},
+		{"h2", &sc->sc_amnezia.am_h[AWG_H2]},
+		{"h3", &sc->sc_amnezia.am_h[AWG_H3]},
+		{"h4", &sc->sc_amnezia.am_h[AWG_H4]},
 	};
 
 	nvl = nvlist_create(0);
@@ -3237,20 +3214,20 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 
 	if (sc->sc_socket.so_port != 0)
 		nvlist_add_number(nvl, "listen-port", sc->sc_socket.so_port);
-	if (sc->sc_socket.so_junk_packet_count > 0)
-		nvlist_add_number(nvl, "jc", sc->sc_socket.so_junk_packet_count);
-	if (sc->sc_socket.so_junk_packet_min_size > 0)
-		nvlist_add_number(nvl, "jmin", sc->sc_socket.so_junk_packet_min_size);
-	if (sc->sc_socket.so_junk_packet_max_size > 0)
-		nvlist_add_number(nvl, "jmax", sc->sc_socket.so_junk_packet_max_size);
-	if (sc->sc_socket.so_init_packet_junk_size > 0)
-		nvlist_add_number(nvl, "s1", sc->sc_socket.so_init_packet_junk_size);
-	if (sc->sc_socket.so_response_packet_junk_size > 0)
-		nvlist_add_number(nvl, "s2", sc->sc_socket.so_response_packet_junk_size);
-	if (sc->sc_socket.so_cookie_packet_junk_size > 0)
-		nvlist_add_number(nvl, "s3", sc->sc_socket.so_cookie_packet_junk_size);
-	if (sc->sc_socket.so_transport_packet_junk_size > 0)
-		nvlist_add_number(nvl, "s4", sc->sc_socket.so_transport_packet_junk_size);
+	if (sc->sc_amnezia.am_junk_packet_count > 0)
+		nvlist_add_number(nvl, "jc", sc->sc_amnezia.am_junk_packet_count);
+	if (sc->sc_amnezia.am_junk_packet_min_size > 0)
+		nvlist_add_number(nvl, "jmin", sc->sc_amnezia.am_junk_packet_min_size);
+	if (sc->sc_amnezia.am_junk_packet_max_size > 0)
+		nvlist_add_number(nvl, "jmax", sc->sc_amnezia.am_junk_packet_max_size);
+	if (sc->sc_amnezia.am_s[AWG_S1] > 0)
+		nvlist_add_number(nvl, "s1", sc->sc_amnezia.am_s[AWG_S1]);
+	if (sc->sc_amnezia.am_s[1] > 0)
+		nvlist_add_number(nvl, "s2", sc->sc_amnezia.am_s[AWG_S2]);
+	if (sc->sc_amnezia.am_s[AWG_S3] > 0)
+		nvlist_add_number(nvl, "s3", sc->sc_amnezia.am_s[AWG_S3]);
+	if (sc->sc_amnezia.am_s[AWG_S4] > 0)
+		nvlist_add_number(nvl, "s4", sc->sc_amnezia.am_s[AWG_S4]);
 
 	for (i = 0; i < sizeof(hparams) / sizeof(hparams[0]); i++) {
 		if (hparams[i].header->min) {
@@ -3262,6 +3239,25 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 				len = snprintf(value, sizeof(value), "%u-%u", hparams[i].header->min, hparams[i].header->max);
 			}
 			nvlist_add_binary(nvl, hparams[i].name, value, len + 1); // +1 for the null terminator
+		}
+	}
+
+	struct {
+		const char *name;
+		const char *value;
+	} iparams_get[] = {
+		{"i1", sc->sc_amnezia.am_i[AWG_I1]},
+		{"i2", sc->sc_amnezia.am_i[AWG_I2]},
+		{"i3", sc->sc_amnezia.am_i[AWG_I3]},
+		{"i4", sc->sc_amnezia.am_i[AWG_I4]},
+		{"i5", sc->sc_amnezia.am_i[AWG_I5]},
+	};
+	size_t iparams_get_count = sizeof(iparams_get) / sizeof(iparams_get[0]);
+
+	for (i = 0; i < iparams_get_count; i++) {
+		if (iparams_get[i].value[0] != '\0') {
+			nvlist_add_binary(nvl, iparams_get[i].name, iparams_get[i].value,
+			    strlen(iparams_get[i].value) + 1);
 		}
 	}
 
@@ -3410,7 +3406,7 @@ wg_ioctl(if_t ifp, u_long cmd, caddr_t data)
 		if (ifr->ifr_mtu <= 0 || ifr->ifr_mtu > MAX_MTU)
 			ret = EINVAL;
 		else {
-			if (wg_check_mtu_s4(sc, ifr->ifr_mtu, sc->sc_socket.so_transport_packet_junk_size)) {
+			if (wg_check_mtu_s4(sc, ifr->ifr_mtu, sc->sc_amnezia.am_s[AWG_S4])) {
 				ret = EINVAL;
 			} else {
 				if_setmtu(ifp, ifr->ifr_mtu);
@@ -3533,15 +3529,18 @@ wg_clone_create(struct if_clone *ifc, char *name, size_t len,
 	sc->sc_ucred = crhold(curthread->td_ucred);
 	sc->sc_socket.so_fibnum = curthread->td_proc->p_fibnum;
 	sc->sc_socket.so_port = 0;
-	sc->sc_socket.so_junk_packet_count = 0;
-	sc->sc_socket.so_junk_packet_min_size = 0;
-	sc->sc_socket.so_junk_packet_max_size = 0;
-	sc->sc_socket.so_init_packet_junk_size = 0;
-	sc->sc_socket.so_response_packet_junk_size = 0;
-	sc->sc_socket.so_pkt_initiation = (wg_hdr_pair){ .min = 0, .max = 0 };
-	sc->sc_socket.so_pkt_response = (wg_hdr_pair){ .min = 0, .max = 0 };
-	sc->sc_socket.so_pkt_cookie = (wg_hdr_pair){ .min = 0, .max = 0 };
-	sc->sc_socket.so_pkt_data = (wg_hdr_pair){ .min = 0, .max = 0 };
+	sc->sc_amnezia.am_junk_packet_count = 0;
+	sc->sc_amnezia.am_junk_packet_min_size = 0;
+	sc->sc_amnezia.am_junk_packet_max_size = 0;
+	for (int i = 0; i < AWG_Sx; i++) {
+		sc->sc_amnezia.am_s[i] = 0;
+	}
+	for (int i = 0; i < AWG_Hx; i++) {
+		sc->sc_amnezia.am_h[i] = (wg_hdr_pair){ .min = 0, .max = 0 };
+	}
+	for (int i = 0; i < AWG_Ix; i++) {
+		sc->sc_amnezia.am_i[i][0] = '\0';
+	}
 
 	TAILQ_INIT(&sc->sc_peers);
 	sc->sc_peers_num = 0;
