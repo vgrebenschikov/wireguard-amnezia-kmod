@@ -3113,7 +3113,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 			size_t size;
 			const char *value = nvlist_get_binary(nvl, name, &size);
 			if (value != NULL && size > 0 && value[size - 1] == '\0') {
-				strlcpy(sc->sc_amnezia.am_i[AWG_I5], value, size);
+				strlcpy(sc->sc_amnezia.am_i[i], value, size);
 			}
 		}
 	}
@@ -3196,16 +3196,6 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 	void *packed;
 	int err = 0;
 
-	struct {
-		const char *name;
-		wg_hdr_pair *header;
-	} hparams[] = {
-		{"h1", &sc->sc_amnezia.am_h[AWG_H1]},
-		{"h2", &sc->sc_amnezia.am_h[AWG_H2]},
-		{"h3", &sc->sc_amnezia.am_h[AWG_H3]},
-		{"h4", &sc->sc_amnezia.am_h[AWG_H4]},
-	};
-
 	nvl = nvlist_create(0);
 	if (!nvl)
 		return (ENOMEM);
@@ -3214,50 +3204,42 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 
 	if (sc->sc_socket.so_port != 0)
 		nvlist_add_number(nvl, "listen-port", sc->sc_socket.so_port);
+
 	if (sc->sc_amnezia.am_junk_packet_count > 0)
 		nvlist_add_number(nvl, "jc", sc->sc_amnezia.am_junk_packet_count);
 	if (sc->sc_amnezia.am_junk_packet_min_size > 0)
 		nvlist_add_number(nvl, "jmin", sc->sc_amnezia.am_junk_packet_min_size);
 	if (sc->sc_amnezia.am_junk_packet_max_size > 0)
 		nvlist_add_number(nvl, "jmax", sc->sc_amnezia.am_junk_packet_max_size);
-	if (sc->sc_amnezia.am_s[AWG_S1] > 0)
-		nvlist_add_number(nvl, "s1", sc->sc_amnezia.am_s[AWG_S1]);
-	if (sc->sc_amnezia.am_s[1] > 0)
-		nvlist_add_number(nvl, "s2", sc->sc_amnezia.am_s[AWG_S2]);
-	if (sc->sc_amnezia.am_s[AWG_S3] > 0)
-		nvlist_add_number(nvl, "s3", sc->sc_amnezia.am_s[AWG_S3]);
-	if (sc->sc_amnezia.am_s[AWG_S4] > 0)
-		nvlist_add_number(nvl, "s4", sc->sc_amnezia.am_s[AWG_S4]);
 
-	for (i = 0; i < sizeof(hparams) / sizeof(hparams[0]); i++) {
-		if (hparams[i].header->min) {
+	for (int i = 0; i < AWG_Sx; i++) {
+		char name[3] = { 's', '1' + i, '\0' };
+		if (sc->sc_amnezia.am_s[i] > 0)
+			nvlist_add_number(nvl, name, sc->sc_amnezia.am_s[i]);
+	}
+
+	for (int i = 0; i < AWG_Hx; i++) {
+		wg_hdr_pair *hdr = &sc->sc_amnezia.am_h[i];
+		if (hdr->min) {
+			char name[3] = { 'h', '1' + i, '\0' };
 			char value[32];
 			size_t len;
-			if (hparams[i].header->min == hparams[i].header->max) {
-				len = snprintf(value, sizeof(value), "%u", hparams[i].header->min);
-			} else {
-				len = snprintf(value, sizeof(value), "%u-%u", hparams[i].header->min, hparams[i].header->max);
-			}
-			nvlist_add_binary(nvl, hparams[i].name, value, len + 1); // +1 for the null terminator
+
+			if (hdr->min == hdr->max)
+				len = snprintf(value, sizeof(value), "%u", hdr->min);
+			else
+				len = snprintf(value, sizeof(value), "%u-%u", hdr->min, hdr->max);
+
+			nvlist_add_binary(nvl, name, value, len + 1); // +1 for the null terminator
 		}
 	}
 
-	struct {
-		const char *name;
-		const char *value;
-	} iparams_get[] = {
-		{"i1", sc->sc_amnezia.am_i[AWG_I1]},
-		{"i2", sc->sc_amnezia.am_i[AWG_I2]},
-		{"i3", sc->sc_amnezia.am_i[AWG_I3]},
-		{"i4", sc->sc_amnezia.am_i[AWG_I4]},
-		{"i5", sc->sc_amnezia.am_i[AWG_I5]},
-	};
-	size_t iparams_get_count = sizeof(iparams_get) / sizeof(iparams_get[0]);
-
-	for (i = 0; i < iparams_get_count; i++) {
-		if (iparams_get[i].value[0] != '\0') {
-			nvlist_add_binary(nvl, iparams_get[i].name, iparams_get[i].value,
-			    strlen(iparams_get[i].value) + 1);
+	for (int i = 0; i < AWG_Ix; i++) {
+		char name[3] = { 'i', '1' + i, '\0' };
+		const char *value = sc->sc_amnezia.am_i[i];
+		if (value && *value) {
+			const char *value = sc->sc_amnezia.am_i[i];
+			nvlist_add_binary(nvl, name, value, strlen(value) + 1);
 		}
 	}
 
