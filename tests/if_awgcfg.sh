@@ -122,6 +122,18 @@ awg_configuration_body()
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
 		awg set $wg h1 0 h2 $h h3 $h h4 0
 
+	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
+		awg set $wg h1 1234567-2234567 h2 2000000
+
+	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
+		awg set $wg h1 1234567-2234567 h2 1234567
+
+	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
+		awg set $wg h1 1234567-2234567 h2 1000000-2234567
+
+	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
+		awg set $wg h1 1234567-2234567 h2 2000000-2000010
+
 	atf_check -s exit:0 -o ignore \
 		awg set $wg $(awg_config)
 
