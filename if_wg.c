@@ -14,6 +14,7 @@
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/counter.h>
+#include <sys/ctype.h>
 #include <sys/gtaskqueue.h>
 #include <sys/jail.h>
 #include <sys/kernel.h>
@@ -2900,6 +2901,165 @@ wg_check_mtu_s4(struct wg_softc *sc, size_t ifmtu, uint32_t s4)
 	return 0;
 }
 
+/* Ix parameter validation - checks format of Ix parameter string */
+static int
+wg_validate_ix_format(struct wg_softc *sc, const char *name, const char *desc, size_t *sizeptr)
+{
+	char *errmsg = NULL;
+	size_t pkt_size = 0;
+	size_t ip_header_size = sizeof(struct ip);
+#ifdef INET6
+	ip_header_size = sizeof(struct ip6_hdr);
+#endif
+
+	size_t max_pkt_size = ETHERMTU - ip_header_size - sizeof(struct udphdr);
+
+	if (desc == NULL || *desc == '\0')
+		return EINVAL;
+
+	char tag = '\0';
+	char subtag = '\0';
+
+	const char *s = desc;
+	while (*s != '\0') {
+		if (*s == ' ') {
+			s++;
+			continue;
+		}
+
+		if (*s != '<' ) {
+			errmsg = "should start with '<'";
+			break;
+		}
+
+		s++;
+
+		tag = *s++;
+		subtag = '\0';
+
+		const char *t_start = NULL;
+		const char *t_end = NULL;
+
+		if (!tag) {
+			errmsg = "incomplete tag definition";
+			break;
+		}
+
+		switch (tag) {
+			case 'b':	/* <b 0x...> - binary data */
+				if (strncmp(s, " 0x", 3)) {
+					errmsg = "<b tag should start with ' 0x'";
+					break;
+				}
+				s += 3;
+				t_start = s;
+
+				for (; *s && isxdigit(*s); s++);
+				t_end = s;
+
+				if (*s != '>' || t_end == t_start) {
+					errmsg = "incomplete tag definition";
+					break;
+				}
+
+				if ((t_end - t_start) & 1) {
+					errmsg = "hex string length must be even";
+					break;
+				}
+
+				s++;
+				pkt_size += (t_end - t_start) / 2;
+
+				continue;  // <b> tag ends here
+
+			case 'c':  // <c>
+			case 't':  // <t>
+				if (*s != '>') {
+					errmsg = "incomplete tag definition";
+					break;
+				}
+
+				s++;
+				pkt_size += sizeof(uint32_t);
+
+				continue;  // <c> tag ends here
+
+			case 'r':  // <r N> <rc N> <rd N>
+				switch (*s) {
+					case ' ':
+						subtag = 'b';
+						break;
+					case 'd':
+						subtag = 'd';
+						s++;
+						break;
+					case 'c':
+						subtag = 'c';
+						s++;
+						break;
+					default:
+						errmsg = "invalid tag definition";
+						break;
+				}
+				if (errmsg)
+					break;
+
+				if (*s != ' ') {
+					errmsg = "incomplete tag definition";
+					break;
+				}
+
+				s++;
+
+				char *endptr;
+				unsigned long sz = strtoul(s, &endptr, 10);
+				if (endptr == s || *endptr != '>' || !sz || sz > max_pkt_size) {
+					errmsg = "invalid size parameter";
+					break;
+				}
+				s = endptr;
+				s++; // skip '>'
+
+				pkt_size += sz;
+
+				continue;  // <r> tag ends here
+
+			default:
+				errmsg = "unknown tag";
+				break;
+		}
+
+		if (errmsg)
+			break;
+
+		/* Check total packet size */
+		if (pkt_size > max_pkt_size) {
+			errmsg = "packet size is too large";
+			break;
+		}
+	}
+
+	if (errmsg) {
+		size_t pos = s - desc;
+		if (tag && subtag == 'b') {
+			DPRINTF(sc, "%s:%zu <%c > - %s\n", name, pos, tag, errmsg);
+		} else if (tag && subtag) {
+			DPRINTF(sc, "%s:%zu <%c%c > - %s\n", name, pos, tag, subtag, errmsg);
+		} else if (tag) {
+			DPRINTF(sc, "%s:%zu <%c> - %s\n", name, pos, tag, errmsg);
+		} else {
+			DPRINTF(sc, "%s:%zu %s\n", name, pos, errmsg);
+		}
+		// DPRINTF(sc, "%s: ... %s\n", name, s);
+		return EINVAL;
+	}
+
+	if (sizeptr != NULL) {
+		*sizeptr = pkt_size;
+	}
+	return 0;
+}
+
 static int
 wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 {
@@ -3113,6 +3273,13 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 			size_t size;
 			const char *value = nvlist_get_binary(nvl, name, &size);
 			if (value != NULL && size > 0 && value[size - 1] == '\0' && size < 2 * ETHERMTU) {
+
+				/* Validate Ix parameter format */
+				size_t pkt_size;
+				err = wg_validate_ix_format(sc, name, value, &pkt_size);
+				if (err)
+					goto out_locked;
+
 				if (sc->sc_amnezia.am_i[i]) {
 					zfree(sc->sc_amnezia.am_i[i], M_WG);
 					sc->sc_amnezia.am_i[i] = NULL;
