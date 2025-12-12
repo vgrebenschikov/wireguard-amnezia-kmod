@@ -71,6 +71,8 @@ wg_basic_body()
 		endpoint ${endpoint2}:12345 allowed-ips ${tunnel2}/32
 	atf_check -s exit:0 -o ignore \
 		jexec wgtest1 awg set $wg1 $awg_cfg
+	atf_check -s exit:0 -o ignore \
+		jexec wgtest1 awg set $wg1 i1 "$(agw_long_i)"
 	atf_check -s exit:0 \
 		jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up
 

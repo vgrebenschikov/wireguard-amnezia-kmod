@@ -34,11 +34,88 @@
 atf_test_case "awg_configuration" "cleanup"
 awg_configuration_head()
 {
-	atf_set descr 'Create a awg(4) and test configuration options'
+	atf_set descr 'Create a awg(4) and test parameter constraints'
 	atf_set require.user root
 }
 
 awg_configuration_body()
+{
+	local epair pri1 pri2 pub1 pub2 wg1 wg2
+		local endpoint1 endpoint2 tunnel1 tunnel2
+
+	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
+
+	wg=$(ifconfig wg create debug)
+	awgcfg=$(awg_config)
+
+	setup_debug
+
+	for p in jc jmin jmax s1 s2 s3 s4 h1 h2 h3 h4; do
+		val=$(awg_config_get $p $awgcfg)
+
+		echo "==[ $p = $val ]==================="
+
+		# set
+		atf_check -s exit:0 -o ignore			awg set $wg $p $val
+		atf_check -s exit:0 -o match:"$val"		awg show $wg $p
+		atf_check -s exit:0 -o match:"$p: $val"	awg show $wg
+		echo
+
+		echo "==[ $p - <reset> ]==================="
+
+		# reset
+		atf_check -s exit:0 -o ignore			awg set $wg $p 0
+		atf_check -s exit:0 -o match:"0"		awg show $wg $p
+		atf_check -s exit:0 -o not-match:"$p: "	awg show $wg
+		echo
+	done
+
+	for p in i1 i2 i3 i4 i5; do
+		n1=$(jot -r 1 1 100)
+		n2=$(jot -r 1 1 100)
+		n3=$(jot -r 1 1 100)
+		val="<b 0xdeadbeef><c><b 0xdeadbeef><t><r $n1><rd $n2><c><rc $n3>"
+
+		echo "==[ $p = $val ]==================="
+		atf_check -s exit:0 -o ignore			awg set $wg $p "$val"
+		atf_check -s exit:0 -o match:"$val"		awg show $wg $p
+		atf_check -s exit:0 -o match:"$p: $val"	awg show $wg
+		echo
+
+		val="$(agw_long_i)"
+		echo "==[ $p = <long> ]==================="
+		atf_check -s exit:0 -o ignore			awg set $wg $p "$val"
+		atf_check -s exit:0 -o match:"$val"		awg show $wg $p
+		atf_check -s exit:0 -o match:"$p: $val"	awg show $wg
+		echo
+
+		echo "==[ $p - <reset> ]==================="
+
+		# reset
+		atf_check -s exit:0 -o ignore			awg set $wg $p ''
+		atf_check -s exit:0 -o match:"^$"		awg show $wg $p
+		atf_check -s exit:0 -o not-match:"$p: "	awg show $wg
+
+		echo
+
+	done
+}
+
+awg_configuration_cleanup()
+{
+	for i in $(ifconfig -g wg); do
+		ifconfig $i destroy
+	done
+}
+
+atf_test_case "awg_constraints" "cleanup"
+awg_constraints_head()
+{
+	atf_set descr 'Create a awg(4) and test parameter constraints'
+	atf_set require.user root
+}
+
+awg_constraints_body()
 {
 	local epair pri1 pri2 pub1 pub2 wg1 wg2
 		local endpoint1 endpoint2 tunnel1 tunnel2
@@ -158,7 +235,7 @@ awg_configuration_body()
 
 }
 
-awg_configuration_cleanup()
+awg_constraints_cleanup()
 {
 	for i in $(ifconfig -g wg); do
 		ifconfig $i destroy
@@ -238,5 +315,6 @@ wide_range_parameters_cleanup()
 atf_init_test_cases()
 {
 	atf_add_test_case "awg_configuration"
+	atf_add_test_case "awg_constraints"
 	atf_add_test_case "wide_range_parameters"
 }
