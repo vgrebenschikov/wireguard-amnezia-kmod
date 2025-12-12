@@ -50,6 +50,7 @@
 #include <netinet/udp_var.h>
 #include <netinet6/nd6.h>
 
+#include "sys/kassert.h"
 #include "sys/libkern.h"
 #include "sys/types.h"
 #include "wg_noise.h"
@@ -268,7 +269,6 @@ struct wg_amnezia {
 	uint32_t	am_s[4];						// Sx
 	wg_hdr_pair	am_h[4];						// Hx
 	char	   *am_i[5];						// Ix
-	size_t		am_i_sizes[5];					// Ix packet sizes
 };
 
 struct wg_socket {
@@ -1460,39 +1460,39 @@ static void
 wg_send_junk_packets(struct wg_peer *peer)
 {
 	struct wg_softc *sc = peer->p_sc;
-	uint8_t *buf;
-	size_t size;
-	int i;
 
-	for (i = 0; i < sc->sc_amnezia.am_junk_packet_count; i++) {
-		/* Generate random size between min and max */
-		size = arc4random_uniform(sc->sc_amnezia.am_junk_packet_max_size -
-			sc->sc_amnezia.am_junk_packet_min_size + 1) +
-			sc->sc_amnezia.am_junk_packet_min_size;
-
-		buf = malloc(size, M_DEVBUF, M_NOWAIT);
-		if (buf == NULL)
-			continue;
-
-		/* Fill with random data */
-		arc4random_buf(buf, size);
-
-		/* Send to peer's endpoint */
-		wg_peer_send_buf(peer, buf, size);
-
-		free(buf, M_DEVBUF);
+	bool send_junk = sc->sc_amnezia.am_junk_packet_count > 0;
+	for (int i = 0; !send_junk && i < AWG_Ix; i++) {
+		send_junk = (sc->sc_amnezia.am_i[i] != NULL);
 	}
 
-	for (int i = 0; i < AWG_Ix; i++) {
-		char *desc = sc->sc_amnezia.am_i[i];
-		size_t size = sc->sc_amnezia.am_i_sizes[i];
-		if (desc && size > 0) {
-			buf = malloc(size, M_DEVBUF, M_NOWAIT);
-			if (buf == NULL)
-				continue;
-			wg_prepare_ix_packet(sc, i, desc, NULL, buf);
+	if (send_junk) {
+		uint8_t buf[ETHERMTU];
+
+		for (int i = 0; i < AWG_Ix; i++) {
+			char *desc = sc->sc_amnezia.am_i[i];
+
+			if (desc) {
+				size_t size;
+
+				if (wg_prepare_ix_packet(sc, i, desc, &size, buf) == 0) {
+					KASSERT(size > sizeof(buf), "wrote too much data into junk packet buffer");
+					wg_peer_send_buf(peer, buf, size);
+				}
+			}
+		}
+
+		for (int i = 0; i < sc->sc_amnezia.am_junk_packet_count; i++) {
+			/* Generate random size between min and max */
+			size_t size = arc4random_uniform(sc->sc_amnezia.am_junk_packet_max_size -
+				sc->sc_amnezia.am_junk_packet_min_size + 1) +
+				sc->sc_amnezia.am_junk_packet_min_size;
+
+			/* Fill with random data */
+			arc4random_buf(buf, size);
+
+			/* Send to peer's endpoint */
 			wg_peer_send_buf(peer, buf, size);
-			free(buf, M_DEVBUF);
 		}
 	}
 }
@@ -3334,7 +3334,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 				/* Validate Ix parameter format */
 				size_t pkt_size;
 				err = wg_prepare_ix_packet(sc, i, value, &pkt_size, NULL);
-				if (err)
+				if (err || !pkt_size || pkt_size > ETHERMTU)
 					goto out_locked;
 
 				if (sc->sc_amnezia.am_i[i]) {
@@ -3349,7 +3349,6 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 				}
 
 				strlcpy(sc->sc_amnezia.am_i[i], value, size);
-				sc->sc_amnezia.am_i_sizes[i] = pkt_size;
 			} else {
 				DPRINTF(sc, "%s: value is not a valid string or too large\n", name);
 				err = EINVAL;
@@ -3762,7 +3761,6 @@ wg_clone_create(struct if_clone *ifc, char *name, size_t len,
 	}
 	for (int i = 0; i < AWG_Ix; i++) {
 		sc->sc_amnezia.am_i[i] = NULL;
-		sc->sc_amnezia.am_i_sizes[i] = 0;
 	}
 
 	TAILQ_INIT(&sc->sc_peers);
