@@ -50,6 +50,8 @@
 #include <netinet/udp_var.h>
 #include <netinet6/nd6.h>
 
+#include "sys/libkern.h"
+#include "sys/types.h"
 #include "wg_noise.h"
 #include "wg_cookie.h"
 #include "version.h"
@@ -266,6 +268,7 @@ struct wg_amnezia {
 	uint32_t	am_s[4];						// Sx
 	wg_hdr_pair	am_h[4];						// Hx
 	char	   *am_i[5];						// Ix
+	size_t		am_i_sizes[5];					// Ix packet sizes
 };
 
 struct wg_socket {
@@ -402,6 +405,7 @@ static void wg_peer_clear_src(struct wg_peer *);
 static void wg_peer_get_endpoint(struct wg_peer *, struct wg_endpoint *);
 static void wg_send_buf(struct wg_softc *, struct wg_endpoint *, uint8_t *, size_t);
 static void wg_send_buf_junk(struct wg_softc *, struct wg_endpoint *, uint8_t *, size_t, size_t);
+static int wg_prepare_ix_packet(struct wg_softc *, int, const char *, size_t *, uint8_t *);
 static void wg_send_keepalive(struct wg_peer *);
 static void wg_handshake(struct wg_softc *, struct wg_packet *);
 static void wg_encrypt(struct wg_softc *, struct wg_packet *);
@@ -1477,6 +1481,19 @@ wg_send_junk_packets(struct wg_peer *peer)
 		wg_peer_send_buf(peer, buf, size);
 
 		free(buf, M_DEVBUF);
+	}
+
+	for (int i = 0; i < AWG_Ix; i++) {
+		char *desc = sc->sc_amnezia.am_i[i];
+		size_t size = sc->sc_amnezia.am_i_sizes[i];
+		if (desc && size > 0) {
+			buf = malloc(size, M_DEVBUF, M_NOWAIT);
+			if (buf == NULL)
+				continue;
+			wg_prepare_ix_packet(sc, i, desc, NULL, buf);
+			wg_peer_send_buf(peer, buf, size);
+			free(buf, M_DEVBUF);
+		}
 	}
 }
 
@@ -2903,10 +2920,11 @@ wg_check_mtu_s4(struct wg_softc *sc, size_t ifmtu, uint32_t s4)
 
 /* Ix parameter validation - checks format of Ix parameter string */
 static int
-wg_validate_ix_format(struct wg_softc *sc, const char *name, const char *desc, size_t *sizeptr)
+wg_prepare_ix_packet(struct wg_softc *sc, int iidx, const char *desc, size_t *sizeptr, uint8_t *buf)
 {
 	char *errmsg = NULL;
 	size_t pkt_size = 0;
+	size_t buf_idx = 0;
 	size_t ip_header_size = sizeof(struct ip);
 #ifdef INET6
 	ip_header_size = sizeof(struct ip6_hdr);
@@ -2970,6 +2988,12 @@ wg_validate_ix_format(struct wg_softc *sc, const char *name, const char *desc, s
 				s++;
 				pkt_size += (t_end - t_start) / 2;
 
+				if (buf) {
+					for (const char *p = t_start; p < t_end; p += 2) {
+						char digit[] = { *p, *(p + 1), '\0' };
+						buf[buf_idx++] = (u_int8_t)strtoul(digit, NULL, 16);
+					}
+				}
 				continue;  // <b> tag ends here
 
 			case 'c':  // <c>
@@ -2981,7 +3005,16 @@ wg_validate_ix_format(struct wg_softc *sc, const char *name, const char *desc, s
 
 				s++;
 				pkt_size += sizeof(uint32_t);
-
+				if (buf) {
+					uint32_t val = 0;
+					if (tag == 'c') {
+						val = if_getcounter(sc->sc_ifp, IFCOUNTER_IPACKETS);
+					} else if (tag == 't') {
+						val = time_second;
+					}
+					*(uint32_t *)(buf + buf_idx) = htonl(val);
+					buf_idx += sizeof(uint32_t);
+				}
 				continue;  // <c> tag ends here
 
 			case 'r':  // <r N> <rc N> <rd N>
@@ -3022,6 +3055,24 @@ wg_validate_ix_format(struct wg_softc *sc, const char *name, const char *desc, s
 
 				pkt_size += sz;
 
+				if (buf) {
+					for (size_t i = 0; i < sz; i++) {
+						uint32_t let;
+						switch (subtag) {
+							case 'd':
+								buf[buf_idx++] = (u_int8_t)('0' + arc4random_uniform('9' - '0' + 1));
+								break;
+							case 'c':
+								let = arc4random_uniform(2 * ('Z' - 'A' + 1));
+								buf[buf_idx++] = (u_int8_t)(let & 1 ? 'A' + (let >> 1) : 'a' + (let >> 1));
+								break;
+							case 'b':
+								buf[buf_idx++] = (uint8_t)arc4random_uniform(UCHAR_MAX + 1);
+								break;
+						}
+					}
+				}
+
 				continue;  // <r> tag ends here
 
 			default:
@@ -3042,21 +3093,27 @@ wg_validate_ix_format(struct wg_softc *sc, const char *name, const char *desc, s
 	if (errmsg) {
 		size_t pos = s - desc;
 		if (tag && subtag == 'b') {
-			DPRINTF(sc, "%s:%zu <%c > - %s\n", name, pos, tag, errmsg);
+			DPRINTF(sc, "i%d:%zu <%c > - %s\n", iidx, pos, tag, errmsg);
 		} else if (tag && subtag) {
-			DPRINTF(sc, "%s:%zu <%c%c > - %s\n", name, pos, tag, subtag, errmsg);
+			DPRINTF(sc, "i%d:%zu <%c%c > - %s\n", iidx, pos, tag, subtag, errmsg);
 		} else if (tag) {
-			DPRINTF(sc, "%s:%zu <%c> - %s\n", name, pos, tag, errmsg);
+			DPRINTF(sc, "i%d:%zu <%c> - %s\n", iidx, pos, tag, errmsg);
 		} else {
-			DPRINTF(sc, "%s:%zu %s\n", name, pos, errmsg);
+			DPRINTF(sc, "i%d:%zu %s\n", iidx, pos, errmsg);
 		}
-		// DPRINTF(sc, "%s: ... %s\n", name, s);
+		// DPRINTF(sc, "i%d: ... %s\n", iidx, s);
 		return EINVAL;
 	}
 
 	if (sizeptr != NULL) {
 		*sizeptr = pkt_size;
 	}
+
+	if (buf) {
+		KASSERT(buf_idx != pkt_size,
+			("%s: packet size is not equal to buffer size %zu != %zu", __func__, pkt_size, buf_idx));
+	}
+
 	return 0;
 }
 
@@ -3276,7 +3333,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 
 				/* Validate Ix parameter format */
 				size_t pkt_size;
-				err = wg_validate_ix_format(sc, name, value, &pkt_size);
+				err = wg_prepare_ix_packet(sc, i, value, &pkt_size, NULL);
 				if (err)
 					goto out_locked;
 
@@ -3292,6 +3349,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 				}
 
 				strlcpy(sc->sc_amnezia.am_i[i], value, size);
+				sc->sc_amnezia.am_i_sizes[i] = pkt_size;
 			} else {
 				DPRINTF(sc, "%s: value is not a valid string or too large\n", name);
 				err = EINVAL;
@@ -3704,6 +3762,7 @@ wg_clone_create(struct if_clone *ifc, char *name, size_t len,
 	}
 	for (int i = 0; i < AWG_Ix; i++) {
 		sc->sc_amnezia.am_i[i] = NULL;
+		sc->sc_amnezia.am_i_sizes[i] = 0;
 	}
 
 	TAILQ_INIT(&sc->sc_peers);
