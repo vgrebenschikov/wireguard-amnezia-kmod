@@ -3330,25 +3330,28 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 			size_t size;
 			const char *value = nvlist_get_binary(nvl, name, &size);
 			if (value != NULL && size > 0 && value[size - 1] == '\0' && size < 2 * ETHERMTU) {
-
-				/* Validate Ix parameter format */
-				size_t pkt_size;
-				err = wg_prepare_ix_packet(sc, i, value, &pkt_size, NULL);
-				if (err || !pkt_size || pkt_size > ETHERMTU)
-					goto out_locked;
+				if (size > 1) {  // non-empty value
+					/* Validate Ix parameter format */
+					size_t pkt_size;
+					err = wg_prepare_ix_packet(sc, i, value, &pkt_size, NULL);
+					if (err || !pkt_size || pkt_size > ETHERMTU)
+						goto out_locked;
+				}
 
 				if (sc->sc_amnezia.am_i[i]) {
 					zfree(sc->sc_amnezia.am_i[i], M_WG);
 					sc->sc_amnezia.am_i[i] = NULL;
 				}
 
-				sc->sc_amnezia.am_i[i] = malloc(size + 1, M_WG, M_WAITOK | M_ZERO);
-				if (sc->sc_amnezia.am_i[i] == NULL) {
-					err = ENOMEM;
-					goto out_locked;
-				}
+				if (size > 1) { // non-empty value
+					sc->sc_amnezia.am_i[i] = malloc(size + 1, M_WG, M_WAITOK | M_ZERO);
+					if (sc->sc_amnezia.am_i[i] == NULL) {
+						err = ENOMEM;
+						goto out_locked;
+					}
 
-				strlcpy(sc->sc_amnezia.am_i[i], value, size);
+					strlcpy(sc->sc_amnezia.am_i[i], value, size);
+				}
 			} else {
 				DPRINTF(sc, "%s: value is not a valid string or too large\n", name);
 				err = EINVAL;
