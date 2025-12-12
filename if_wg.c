@@ -3184,7 +3184,8 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	}
 	if (nvlist_exists_number(nvl, "jmax")) {
 		uint32_t jmax = nvlist_get_number(nvl, "jmax");
-		if (jmax > 1280 || jmax <= sc->sc_amnezia.am_junk_packet_min_size) {
+		uint32_t jmin = sc->sc_amnezia.am_junk_packet_min_size;
+		if (jmax > 1280 || (jmin && jmax <= jmin)) {
 			DPRINTF(sc, "jmax=%" PRIu32 " is too large, should be less than 1280 and greater than jmin\n", jmax);
 			err = EINVAL;
 			goto out_locked;
