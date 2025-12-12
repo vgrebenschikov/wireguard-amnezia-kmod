@@ -43,9 +43,6 @@ awg_config() {
 		h3=$(hp)
 		h4=$(hp)
 
-		# check s1 + 56 == s2
-		[ $(($s1 + 56)) -eq $s2 ] && continue
-
 		# check overlaps
 		check_h_overlap $h1 $h2 $h3 $h4 || continue
 		check_h_overlap $h2 $h1 $h3 $h4 || continue

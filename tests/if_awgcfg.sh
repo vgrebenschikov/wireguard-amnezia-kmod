@@ -154,24 +154,35 @@ awg_constraints_body()
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
 		awg set $wg jmin $jmax jmax $jmin
 
-	# s1/s2
+	# s1/s2/s3/s4
 
+	s1=1304
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-		awg set $wg s1 100 s2 156
+		awg set $wg s1 $(($s1 + 1))
 
-	s1=$(jot -r 1 15 1132)
-	s2=$(($s1 + 56))
+	atf_check -s exit:0 -o ignore -e ignore \
+		awg set $wg s1 $s1
+
+	s2=1360
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-		awg set $wg s1 $s1 s2 $s2
+		awg set $wg s2 $(($s2 + 1))
 
-	s1=$(jot -r 1 71 1132)
-	s2=$(($s1 - 56))
+	atf_check -s exit:0 -o ignore -e ignore \
+		awg set $wg s2 $s2
 
-	atf_check -s exit:0 -o ignore \
-		awg set $wg s1 $s1 s2 $s2
+	s3=1388
+	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
+		awg set $wg s3 $(($s3 + 1))
 
-	atf_check -s exit:0 -o ignore \
-		awg set $wg s1 $s1 s2 $s1
+	atf_check -s exit:0 -o ignore -e ignore \
+		awg set $wg s3 $s3
+
+	s4=924
+	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
+		awg set $wg s4 $(($s4 + 1))
+
+	atf_check -s exit:0 -o ignore -e ignore \
+		awg set $wg s4 $s4
 
 	# h1/h2/h3/h4
 

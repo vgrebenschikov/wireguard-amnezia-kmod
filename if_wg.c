@@ -83,6 +83,14 @@
 
 #define WG_PKT_DEFAULT_MAX	WG_PKT_DATA
 
+#define AWG_PACKET_DATA_MIN	512
+#ifdef INET6
+#  define AWG_PACKET_SPACE	((ETHERMTU) - sizeof(struct ip6_hdr) - sizeof(struct udphdr))
+#else
+#  define AWG_PACKET_SPACE	((ETHERMTU) - sizeof(struct ip) - sizeof(struct udphdr))
+#endif
+
+
 #define AWG_S1 0
 #define AWG_S2 1
 #define AWG_S3 2
@@ -2925,12 +2933,8 @@ wg_prepare_ix_packet(struct wg_softc *sc, int iidx, const char *desc, size_t *si
 	char *errmsg = NULL;
 	size_t pkt_size = 0;
 	size_t buf_idx = 0;
-	size_t ip_header_size = sizeof(struct ip);
-#ifdef INET6
-	ip_header_size = sizeof(struct ip6_hdr);
-#endif
 
-	size_t max_pkt_size = ETHERMTU - ip_header_size - sizeof(struct udphdr);
+	size_t max_pkt_size = AWG_PACKET_SPACE;
 
 	if (desc == NULL || *desc == '\0')
 		return EINVAL;
@@ -3202,23 +3206,16 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		char name[3] = { 's', '1' + i, '\0' };
 		if (nvlist_exists_number(nvl, name)) {
 			uint32_t s = nvlist_get_number(nvl, name);
-			if (s + amnezia_structureres[i].ams_sz > 1280) {
+			uint32_t extra_size = (i == AWG_S4) ? AWG_PACKET_DATA_MIN : 0;  // keep some minimal space for data
+			if (s + amnezia_structureres[i].ams_sz + extra_size > AWG_PACKET_SPACE) {
 				DPRINTF(sc, "%s=%" PRIu32 " is too large, should be less than %" PRIu32 "\n", 
-						name, s, (uint32_t)(1280 - amnezia_structureres[i].ams_sz));
+						name, s, (uint32_t)(AWG_PACKET_SPACE - amnezia_structureres[i].ams_sz - extra_size));
 
 				err = EINVAL;
 				goto out_locked;
 			}
 			sx[i] = s;
 		}
-	}
-
-	uint32_t s1size = sx[AWG_S1] + amnezia_structureres[AWG_S1].ams_sz;
-	uint32_t s2size = sx[AWG_S2] + amnezia_structureres[AWG_S2].ams_sz;
-	if ((sx[AWG_S1] || sx[AWG_S2]) && (s1size == s2size)) {
-		DPRINTF(sc, "s1 + %" PRIu32 " and s2 must be different\n", s1size - s2size);
-		err = EINVAL;
-		goto out_locked;
 	}
 
 	if (sx[AWG_S4]) {
