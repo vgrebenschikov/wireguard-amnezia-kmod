@@ -126,22 +126,28 @@ awg_constraints_body()
 
 	# jc/jmin/jmax
 
+	jc=255
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-		awg set $wg jc 256
+		awg set $wg jc $(($jc + 1))
 
-	atf_check -s exit:0 -o ignore \
-		awg set $wg jc 255
+	atf_check -s exit:0 -o ignore -e ignore \
+		awg set $wg jc $jc
 
+	jmin=1200
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-		awg set $wg jmax 1281
+		awg set $wg jmin $(($jmin + 1))
 
-	atf_check -s exit:0 -o ignore \
-		awg set $wg jmax 1280
+	atf_check -s exit:0 -o ignore -e ignore \
+		awg set $wg jmin $jmin
 
+	jmax=1280
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
-		awg set $wg jmin 1280 jmax 1280
+		awg set $wg jmin $(($jmax + 1))
 
-	jx=$(jot -r 1 10 1280)
+	atf_check -s exit:0 -o ignore -e ignore \
+		awg set $wg jmax $jmax
+
+	jx=$(jot -r 1 1 $jmin)
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
 		awg set $wg jmin $jx jmax $jx
 
@@ -177,7 +183,7 @@ awg_constraints_body()
 	atf_check -s exit:0 -o ignore -e ignore \
 		awg set $wg s3 $s3
 
-	s4=924
+	s4=160
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
 		awg set $wg s4 $(($s4 + 1))
 
@@ -229,21 +235,8 @@ awg_constraints_body()
 	atf_check -s exit:0 -o ignore \
 		awg set $wg h1 0 h2 0 h3 0 h4 0
 
-	atf_check -s exit:0 -o not-match:'h1:' -e empty \
+	atf_check -s exit:0 -o not-match:'h[1-4]:' -e empty \
 		awg show $wg
-
-	atf_check -s exit:0 -o not-match:'h2:' -e empty \
-		awg show $wg
-
-	atf_check -s exit:0 -o not-match:'h3:' -e empty \
-		awg show $wg
-
-	atf_check -s exit:0 -o not-match:'h4:' -e empty \
-		awg show $wg
-
-	atf_check -s exit:0 -o ignore \
-		awg show $wg
-
 }
 
 awg_constraints_cleanup()

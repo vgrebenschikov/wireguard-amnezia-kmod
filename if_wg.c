@@ -83,13 +83,13 @@
 
 #define WG_PKT_DEFAULT_MAX	WG_PKT_DATA
 
-#define AWG_PACKET_DATA_MIN	512
 #ifdef INET6
 #  define AWG_PACKET_SPACE	((ETHERMTU) - sizeof(struct ip6_hdr) - sizeof(struct udphdr))
 #else
 #  define AWG_PACKET_SPACE	((ETHERMTU) - sizeof(struct ip) - sizeof(struct udphdr))
 #endif
 
+#define AWG_PACKET_S4_MAX_SIZE	160
 
 #define AWG_S1 0
 #define AWG_S2 1
@@ -1842,6 +1842,11 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 		if (m == NULL)
 			goto out;
 
+		if (junk_size > M_SIZE(m)) {
+			DPRINTF(sc, "s4 junk size is greater than remaining mbuf size (%zu > %u)\n", junk_size, M_SIZE(m));
+			goto out;
+		}
+
 		arc4random_buf(mtod(m, uint8_t *), junk_size);
 	}
 
@@ -3206,10 +3211,12 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		char name[3] = { 's', '1' + i, '\0' };
 		if (nvlist_exists_number(nvl, name)) {
 			uint32_t s = nvlist_get_number(nvl, name);
-			uint32_t extra_size = (i == AWG_S4) ? AWG_PACKET_DATA_MIN : 0;  // keep some minimal space for data
-			if (s + amnezia_structureres[i].ams_sz + extra_size > AWG_PACKET_SPACE) {
+			uint32_t max_size = (i == AWG_S4) ?
+						AWG_PACKET_S4_MAX_SIZE :   // small as will be placed into prepended mbuf
+						AWG_PACKET_SPACE - amnezia_structureres[i].ams_sz;
+			if (s > max_size) {
 				DPRINTF(sc, "%s=%" PRIu32 " is too large, should be less than %" PRIu32 "\n", 
-						name, s, (uint32_t)(AWG_PACKET_SPACE - amnezia_structureres[i].ams_sz - extra_size));
+						name, s, max_size);
 
 				err = EINVAL;
 				goto out_locked;
