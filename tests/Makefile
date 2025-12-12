@@ -5,6 +5,7 @@ ATF_TESTS_SH+=	if_awg
 ATF_TESTS_SH+=	if_awgcfg
 ATF_TESTS_SH+=	if_awg1
 ATF_TESTS_SH+=	if_awg2
+ATF_TESTS_SH+=	awg_quic
 
 # The netmap bridge application is used by if_wg tests.
 .PATH:	/usr/src/tools/tools/netmap
