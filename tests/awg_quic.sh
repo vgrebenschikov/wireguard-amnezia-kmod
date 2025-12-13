@@ -99,7 +99,7 @@ awg_quic_body()
 			-e _ws.col.Info &
 	tsharkpid=$!
 
-	atf_check -s exit:0 -o ignore sleep 2
+	atf_check -s exit:0 -o ignore sleep 3
 
 	# Generous timeout since the handshake takes some time.
 	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 -t 5 $tunnel2
