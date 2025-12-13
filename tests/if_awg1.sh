@@ -31,6 +31,8 @@
 . "$(atf_get_srcdir)/vnet.subr"
 . "$(atf_get_srcdir)/awg.subr"
 
+awg_bin=amnezia-go-v1
+
 atf_test_case "amnezia_kmod2go" "cleanup"
 amnezia_kmod2go_head()
 {
@@ -62,7 +64,6 @@ amnezia_kmod2go_body()
 	pub1=$(jexec wgtest1 awg show $wg1 public-key)
 
 	wg2=wg2
-	awg_bin=amnezia-go-v1
 	which $awg_bin > /dev/null 2>&1 \
 		|| atf_skip "This test requires $awg_bin tool and could not find it in the PATH"
 
@@ -139,7 +140,10 @@ amnezia_go2kmod_body()
 	pub1=$(jexec wgtest1 awg show $wg1 public-key)
 
 	wg2=wg2
-	jexec wgtest2 pkill -9 amnezia-go || true
+	which $awg_bin > /dev/null 2>&1 \
+		|| atf_skip "This test requires $awg_bin tool and could not find it in the PATH"
+
+	jexec wgtest2 pkill -9 $awg_bin || true
 	sleep 1
 
 	jexec wgtest2 amnezia-go --foreground $wg2 & awgpid=$!

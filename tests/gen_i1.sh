@@ -10,5 +10,6 @@ tsharkpid=$!
 sleep 1
 
 quiche-client https://www.cloudflare.com/ > /dev/null 2>&1
+# curl -o /dev/null--http3 https://www.cloudflare.com/
 
 wait $tsharkpid
