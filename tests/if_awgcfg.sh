@@ -316,9 +316,127 @@ wide_range_parameters_cleanup()
 	vnet_cleanup
 }
 
+atf_test_case "mtu" "cleanup"
+mtu_head()
+{
+	atf_set descr 'Create a awg(4) and test MTU parameter'
+	atf_set require.user root
+}
+
+mtu_body()
+{
+	local epair pri1 pri2 pub1 pub2 wg1 wg2
+		local endpoint1 endpoint2 tunnel1 tunnel2
+
+	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
+
+	pri1=$(wg genkey)
+	pri2=$(wg genkey)
+
+	endpoint1=192.168.2.1
+	endpoint2=192.168.2.2
+	tunnel1=169.254.0.1
+	tunnel2=169.254.0.2
+
+	epair=$(vnet_mkepair)
+
+	vnet_init
+
+	vnet_mkjail wgtest1 ${epair}a
+	vnet_mkjail wgtest2 ${epair}b
+
+	setup_debug
+
+	awg_cfg=$(awg_config | sed -E 's/ s4 [0-9]+//')
+
+	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
+	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
+
+	wg1=$(jexec wgtest1 ifconfig wg create)
+	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
+		private-key /dev/stdin
+	pub1=$(jexec wgtest1 wg show $wg1 public-key)
+
+	wg2=$(jexec wgtest2 ifconfig wg create)
+	echo "$pri2" | jexec wgtest2 wg set $wg2 listen-port 12345 \
+		private-key /dev/stdin
+	pub2=$(jexec wgtest2 wg show $wg2 public-key)
+
+	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
+
+	atf_check -s exit:0 -o ignore \
+		jexec wgtest1 wg set $wg1 peer "$pub2" \
+		endpoint ${endpoint2}:12345 allowed-ips ${tunnel2}/32
+	atf_check -s exit:0 -o ignore \
+		jexec wgtest1 awg set $wg1 $awg_cfg
+	atf_check -s exit:0 \
+		jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up
+
+	atf_check -s exit:0 -o ignore \
+		jexec wgtest2 wg set $wg2 peer "$pub1" \
+		endpoint ${endpoint1}:12345 allowed-ips ${tunnel1}/32
+	atf_check -s exit:0 -o ignore \
+		jexec wgtest2 awg set $wg2 $awg_cfg
+	atf_check -s exit:0 \
+		jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up
+
+	# Generous timeout since the handshake takes some time.
+	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 -t 5 $tunnel2
+	atf_check -s exit:0 -o ignore jexec wgtest2 ping -c 1 $tunnel1
+
+	# check default MTU set on interface
+	atf_check -s exit:0 -o match:" mtu 1420" jexec wgtest1 ifconfig $wg1
+	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg
+
+	# check kernel warning if set MTU too big
+	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
+	atf_check -s exit:0 -o ignore jexec wgtest1 ifconfig $wg1 mtu 1500
+	atf_check -s exit:0 -o match:"MTU is too big 1500 tunnel packet may be 1568 with s4=0, suggested MTU to 1424" dmesg
+
+	# check no kernel warning if set MTU to suggested value
+	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
+	atf_check -s exit:0 -o ignore jexec wgtest1 ifconfig $wg1 mtu 1424
+	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg
+	atf_check -s exit:0 -o match:" mtu 1424" jexec wgtest1 ifconfig $wg1
+
+	s4=10
+	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
+	atf_check -s exit:0 -o ignore jexec wgtest1 awg set $wg1 s4 $s4
+	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg
+	atf_check -s exit:0 -o match:" mtu 1424" jexec wgtest1 ifconfig $wg1
+
+	s4=20
+	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
+	atf_check -s exit:0 -o ignore jexec wgtest1 awg set $wg1 s4 $s4
+	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg
+	atf_check -s exit:0 -o match:" mtu 1408" jexec wgtest1 ifconfig $wg1
+
+	# set matching MTU -> no warning
+	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
+	atf_check -s exit:0 -o ignore jexec wgtest1 ifconfig $wg1 mtu 1408
+	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg
+
+	# set bigger MTU -> warning
+	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
+	atf_check -s exit:0 -o ignore jexec wgtest1 ifconfig $wg1 mtu 1410
+	atf_check -s exit:0 -o match:"MTU is too big 1410 tunnel packet may be 1508 with s4=20, suggested MTU to 1408" dmesg
+
+	s4=57
+	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
+	atf_check -s exit:0 -o ignore jexec wgtest1 awg set $wg1 s4 $s4
+	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg
+	atf_check -s exit:0 -o match:" mtu 1376" jexec wgtest1 ifconfig $wg1
+}
+
+mtu_cleanup()
+{
+	vnet_cleanup
+}
+
 atf_init_test_cases()
 {
 	atf_add_test_case "awg_configuration"
 	atf_add_test_case "awg_constraints"
 	atf_add_test_case "wide_range_parameters"
+	atf_add_test_case "mtu"
 }

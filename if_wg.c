@@ -2903,8 +2903,8 @@ out:
 }
 
 /* check if MTU matches s4, return new MTU if it does not */
-static size_t
-wg_check_mtu_s4(struct wg_softc *sc, size_t ifmtu, uint32_t s4)
+static uint32_t
+wg_check_mtu_s4(struct wg_softc *sc, uint32_t ifmtu, uint32_t s4, bool warn)
 {
 	size_t ip_header_size = sizeof(struct ip);
 #ifdef INET6
@@ -2919,11 +2919,12 @@ wg_check_mtu_s4(struct wg_softc *sc, size_t ifmtu, uint32_t s4)
 		+ payload_size;
 
 	if (max_pkt_size > ETHERMTU) {
-		size_t new_mtu = ETHERMTU - ip_header_size - sizeof(struct udphdr) - s4 - sizeof(struct wg_pkt_data);
+		uint32_t new_mtu = ETHERMTU - ip_header_size - sizeof(struct udphdr) - s4 - sizeof(struct wg_pkt_data);
 		new_mtu = new_mtu & ~padding_mask;
 
-		DPRINTF(sc, "MTU is too big %zu tunnel packet may be %zu with s4=%d, suggested MTU is %zu\n",
-			ifmtu, max_pkt_size, s4, new_mtu);
+		if (warn || (if_getflags(sc->sc_ifp) & IFF_DEBUG))
+			if_printf(sc->sc_ifp, "MTU is too big %u tunnel packet may be %zu with s4=%d, suggested MTU to %u\n",
+				ifmtu, max_pkt_size, s4, new_mtu);
 
 		return new_mtu;
 	}
@@ -3226,7 +3227,7 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 	}
 
 	if (sx[AWG_S4]) {
-		int new_mtu = wg_check_mtu_s4(sc, if_getmtu(ifp), sx[AWG_S4]);
+		uint32_t new_mtu = wg_check_mtu_s4(sc, if_getmtu(ifp), sx[AWG_S4], false);
 		if (new_mtu) {
 			if (new_mtu < ETHERMTU) {
 				DPRINTF(sc, "Setting MTU to %d\n", new_mtu);
@@ -3632,14 +3633,11 @@ wg_ioctl(if_t ifp, u_long cmd, caddr_t data)
 			wg_down(sc);
 		break;
 	case SIOCSIFMTU:
-		if (ifr->ifr_mtu <= 0 || ifr->ifr_mtu > MAX_MTU)
+		if (ifr->ifr_mtu < IF_MINMTU || ifr->ifr_mtu > MAX_MTU)
 			ret = EINVAL;
 		else {
-			if (wg_check_mtu_s4(sc, ifr->ifr_mtu, sc->sc_amnezia.am_s[AWG_S4])) {
-				ret = EINVAL;
-			} else {
-				if_setmtu(ifp, ifr->ifr_mtu);
-			}
+			wg_check_mtu_s4(sc, ifr->ifr_mtu, sc->sc_amnezia.am_s[AWG_S4], true);
+			if_setmtu(ifp, ifr->ifr_mtu);
 		}
 		break;
 	case SIOCADDMULTI:
