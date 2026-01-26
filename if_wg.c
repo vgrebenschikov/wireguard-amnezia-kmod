@@ -42,13 +42,15 @@
 #include <net/netisr.h>
 #include <net/radix.h>
 #include <netinet/in.h>
-#include <netinet6/in6_var.h>
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <netinet/ip_icmp.h>
 #include <netinet/icmp6.h>
 #include <netinet/udp_var.h>
+#ifdef INET6
+#include <netinet6/in6_var.h>
 #include <netinet6/nd6.h>
+#endif
 
 #include "sys/kassert.h"
 #include "sys/libkern.h"
@@ -3814,8 +3816,15 @@ wg_clone_create(struct if_clone *ifc, char *name, size_t len,
 	if_attach(ifp);
 	bpfattach(ifp, DLT_NULL, sizeof(uint32_t));
 #ifdef INET6
+#if __FreeBSD_version >= 1600011
+	/* FreeBSD 16.0+ uses if_getinet6()->nd_flags */
+	if_getinet6(ifp)->nd_flags &= ~ND6_IFF_AUTO_LINKLOCAL;
+	if_getinet6(ifp)->nd_flags |= ND6_IFF_NO_DAD;
+#else
+	/* FreeBSD < 16.0 uses ND_IFINFO()->flags */
 	ND_IFINFO(ifp)->flags &= ~ND6_IFF_AUTO_LINKLOCAL;
 	ND_IFINFO(ifp)->flags |= ND6_IFF_NO_DAD;
+#endif
 #endif
 	sx_xlock(&wg_sx);
 	LIST_INSERT_HEAD(&wg_list, sc, sc_entry);
