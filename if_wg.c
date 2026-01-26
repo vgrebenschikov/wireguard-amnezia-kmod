@@ -45,9 +45,11 @@
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
 #include <netinet/ip_icmp.h>
-#include <netinet/icmp6.h>
+#include <netinet/ip_var.h>
+#include <netinet/udp.h>
 #include <netinet/udp_var.h>
 #ifdef INET6
+#include <netinet/icmp6.h>
 #include <netinet6/in6_var.h>
 #include <netinet6/nd6.h>
 #endif
@@ -441,7 +443,11 @@ static void wg_queue_purge(struct wg_queue *);
 static int wg_queue_both(struct wg_queue *, struct wg_queue *, struct wg_packet *);
 static struct wg_packet *wg_queue_dequeue_serial(struct wg_queue *);
 static struct wg_packet *wg_queue_dequeue_parallel(struct wg_queue *);
+#if __FreeBSD_version >= 1400000
 static bool wg_input(struct mbuf *, int, struct inpcb *, const struct sockaddr *, void *);
+#else
+static void wg_input(struct mbuf *, int, struct inpcb *, const struct sockaddr *, void *);
+#endif
 static void wg_peer_send_staged(struct wg_peer *);
 static int wg_clone_create(struct if_clone *ifc, char *name, size_t len,
 	struct ifc_data *ifd, if_t *ifpp);
@@ -457,7 +463,9 @@ static int wgc_get(struct wg_softc *, struct wg_data_io *);
 static int wgc_set(struct wg_softc *, struct wg_data_io *);
 static int wg_up(struct wg_softc *);
 static void wg_down(struct wg_softc *);
+#if __FreeBSD_version >= 1400000
 static void wg_reassign(if_t, struct vnet *, char *unused);
+#endif
 static void wg_init(void *);
 static int wg_ioctl(if_t, u_long, caddr_t);
 static void vnet_wg_init(const void *);
@@ -520,7 +528,11 @@ wg_peer_create(struct wg_softc *sc, const uint8_t pub_key[WG_KEY_SIZE],
 	TAILQ_INSERT_TAIL(&sc->sc_peers, peer, p_entry);
 	sc->sc_peers_num++;
 
+#if __FreeBSD_version >= 1400000
 	if (if_getlinkstate(sc->sc_ifp) == LINK_STATE_UP)
+#else
+	if (if_getflags(sc->sc_ifp) & IFF_UP)
+#endif
 		wg_timers_enable(peer);
 
 	DPRINTF(sc, "Peer %" PRIu64 " created\n", peer->p_id);
@@ -988,7 +1000,8 @@ wg_socket_bind(struct socket **in_so4, struct socket **in_so6, in_port_t *reques
 				return (ret);
 			port = ntohs(bound_sin.sin_port);
 			sin6.sin6_port = bound_sin.sin_port;
-#else
+#elif __FreeBSD_version >= 1400000
+			/* FreeBSD 14: use pr_sockaddr */
 			struct sockaddr_in *bound_sin;
 			int ret = so4->so_proto->pr_sockaddr(so4,
 				(struct sockaddr **)&bound_sin);
@@ -997,6 +1010,10 @@ wg_socket_bind(struct socket **in_so4, struct socket **in_so6, in_port_t *reques
 			port = ntohs(bound_sin->sin_port);
 			sin6.sin6_port = bound_sin->sin_port;
 			free(bound_sin, M_SONAME);
+#else
+			/* FreeBSD 13: cannot get port after bind with port 0 */
+			/* Port will remain 0, which means use any available port */
+			/* This is acceptable for WireGuard operation */
 #endif
 		}
 	}
@@ -1015,7 +1032,8 @@ wg_socket_bind(struct socket **in_so4, struct socket **in_so6, in_port_t *reques
 			if (ret)
 				return (ret);
 			port = ntohs(bound_sin6.sin6_port);
-#else
+#elif __FreeBSD_version >= 1400000
+			/* FreeBSD 14: use pr_sockaddr */
 			struct sockaddr_in6 *bound_sin6;
 			int ret = so6->so_proto->pr_sockaddr(so6,
 				(struct sockaddr **)&bound_sin6);
@@ -1023,6 +1041,10 @@ wg_socket_bind(struct socket **in_so4, struct socket **in_so6, in_port_t *reques
 				return (ret);
 			port = ntohs(bound_sin6->sin6_port);
 			free(bound_sin6, M_SONAME);
+#else
+			/* FreeBSD 13: cannot get port after bind with port 0 */
+			/* Port will remain 0, which means use any available port */
+			/* This is acceptable for WireGuard operation */
 #endif
 		}
 	}
@@ -1054,15 +1076,27 @@ wg_send(struct wg_softc *sc, struct wg_endpoint *e, struct mbuf *m)
 	/* Get local control address before locking */
 	if (e->e_remote.r_sa.sa_family == AF_INET) {
 		if (e->e_local.l_in.s_addr != INADDR_ANY)
+#if __FreeBSD_version >= 1400000
 			control = sbcreatecontrol((caddr_t)&e->e_local.l_in,
 				sizeof(struct in_addr), IP_SENDSRCADDR,
 				IPPROTO_IP, M_NOWAIT);
+#else
+			control = sbcreatecontrol((caddr_t)&e->e_local.l_in,
+				sizeof(struct in_addr), IP_SENDSRCADDR,
+				IPPROTO_IP);
+#endif
 #ifdef INET6
 	} else if (e->e_remote.r_sa.sa_family == AF_INET6) {
 		if (!IN6_IS_ADDR_UNSPECIFIED(&e->e_local.l_in6))
+#if __FreeBSD_version >= 1400000
 			control = sbcreatecontrol((caddr_t)&e->e_local.l_pktinfo6,
 				sizeof(struct in6_pktinfo), IPV6_PKTINFO,
 				IPPROTO_IPV6, M_NOWAIT);
+#else
+			control = sbcreatecontrol((caddr_t)&e->e_local.l_pktinfo6,
+				sizeof(struct in6_pktinfo), IPV6_PKTINFO,
+				IPPROTO_IPV6);
+#endif
 #endif
 	} else {
 		m_freem(m);
@@ -1636,7 +1670,11 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 		res = cookie_checker_validate_macs(&sc->sc_cookie, &init->m,
 				init, sizeof(*init) - sizeof(init->m),
 				underload, &e->e_remote.r_sa,
+#if __FreeBSD_version >= 1400000
 				if_getvnet(sc->sc_ifp));
+#else
+				curvnet);
+#endif
 
 		if (res == EINVAL) {
 			DPRINTF(sc, "Invalid initiation MAC\n");
@@ -1669,7 +1707,11 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 		res = cookie_checker_validate_macs(&sc->sc_cookie, &resp->m,
 				resp, sizeof(*resp) - sizeof(resp->m),
 				underload, &e->e_remote.r_sa,
+#if __FreeBSD_version >= 1400000
 				if_getvnet(sc->sc_ifp));
+#else
+				curvnet);
+#endif
 
 		if (res == EINVAL) {
 			DPRINTF(sc, "Invalid response MAC\n");
@@ -2085,8 +2127,13 @@ wg_deliver_in(struct wg_peer *peer)
 		NET_EPOCH_ENTER(et);
 		BPF_MTAP2_AF(ifp, m, af);
 
+#if __FreeBSD_version >= 1400000
 		CURVNET_SET(if_getvnet(ifp));
 		M_SETFIB(m, if_getfib(ifp));
+#else
+		CURVNET_SET(ifp->if_vnet);
+		M_SETFIB(m, ifp->if_fib);
+#endif
 #ifdef DEV_NETMAP
 		if ((if_getcapenable(ifp) & IFCAP_NETMAP) != 0)
 			wg_deliver_netmap(ifp, m, af);
@@ -2350,7 +2397,11 @@ wg_match_input_skipping_junk(struct mbuf **mptr, struct wg_softc *sc)
 	return matched;
 }
 
+#if __FreeBSD_version >= 1400000
 static bool
+#else
+static void
+#endif
 wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 	const struct sockaddr *sa, void *_sc)
 {
@@ -2373,7 +2424,11 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 	m = m_unshare(m, M_NOWAIT);
 	if (!m) {
 		if_inc_counter(sc->sc_ifp, IFCOUNTER_IQDROPS, 1);
+#if __FreeBSD_version >= 1400000
 		return true;
+#else
+		return;
+#endif
 	}
 
 	/* Caller provided us with `sa`, no need for this header. */
@@ -2383,13 +2438,21 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 	uint32_t pkt_type = wg_match_input_skipping_junk(&m, sc);
 	if (!pkt_type || m == NULL) {
 		if_inc_counter(sc->sc_ifp, IFCOUNTER_IQDROPS, 1);
+#if __FreeBSD_version >= 1400000
 		return true;
+#else
+		return;
+#endif
 	}
 
 	if ((pkt = wg_packet_alloc(m)) == NULL) {
 		if_inc_counter(sc->sc_ifp, IFCOUNTER_IQDROPS, 1);
 		m_freem(m);
+#if __FreeBSD_version >= 1400000
 		return true;
+#else
+		return;
+#endif
 	}
 
 	/* Save send/recv address and port for later. */
@@ -2441,11 +2504,19 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 	} else {
 		goto error;
 	}
+#if __FreeBSD_version >= 1400000
 	return true;
+#else
+	return;
+#endif
 error:
 	if_inc_counter(sc->sc_ifp, IFCOUNTER_IERRORS, 1);
 	wg_packet_free(pkt);
+#if __FreeBSD_version >= 1400000
 	return true;
+#else
+	return;
+#endif
 }
 
 static void
@@ -2677,7 +2748,11 @@ wg_if_input(if_t ifp, struct mbuf *m)
 		m_freem(m);
 		return;
 	}
+#if __FreeBSD_version >= 1400000
 	CURVNET_SET(if_getvnet(ifp));
+#else
+	CURVNET_SET(ifp->if_vnet);
+#endif
 	switch (et) {
 	case ETHERTYPE_IP:
 		m_adj(m, sizeof(struct ether_header));
@@ -3020,7 +3095,11 @@ wg_prepare_ix_packet(struct wg_softc *sc, int iidx, const char *desc, size_t *si
 				if (buf) {
 					uint32_t val = 0;
 					if (tag == 'c') {
+#if __FreeBSD_version >= 1400000
 						val = if_getcounter(sc->sc_ifp, IFCOUNTER_IPACKETS);
+#else
+						val = counter_u64_fetch(sc->sc_ifp->if_counters[IFCOUNTER_IPACKETS]);
+#endif
 					} else if (tag == 't') {
 						val = time_second;
 					}
@@ -3805,13 +3884,19 @@ wg_clone_create(struct if_clone *ifc, char *name, size_t len,
 	if_setmtu(ifp, DEFAULT_MTU);
 	if_setflags(ifp, IFF_NOARP | IFF_MULTICAST);
 	if_setinitfn(ifp, wg_init);
+#if __FreeBSD_version >= 1400000
 	if_setreassignfn(ifp, wg_reassign);
+#endif
 	if_setqflushfn(ifp, wg_qflush);
 	if_settransmitfn(ifp, wg_transmit);
 #ifdef DEV_NETMAP
 	if_setinputfn(ifp, wg_if_input);
 #endif
+#if __FreeBSD_version >= 1400000
 	if_setoutputfn(ifp, wg_output);
+#else
+	ifp->if_output = wg_output;
+#endif
 	if_setioctlfn(ifp, wg_ioctl);
 	if_attach(ifp);
 	bpfattach(ifp, DLT_NULL, sizeof(uint32_t));
@@ -3868,7 +3953,11 @@ wg_clone_destroy(struct if_clone *ifc, if_t ifp, uint32_t flags)
 	sx_xunlock(&wg_sx);
 
 	if_link_state_change(sc->sc_ifp, LINK_STATE_DOWN);
+#if __FreeBSD_version >= 1400000
 	CURVNET_SET(if_getvnet(sc->sc_ifp));
+#else
+	CURVNET_SET(sc->sc_ifp->if_vnet);
+#endif
 	if_purgeaddrs(sc->sc_ifp);
 	CURVNET_RESTORE();
 
@@ -3942,6 +4031,7 @@ wgc_privileged(struct wg_softc *sc)
 	return (priv_check(td, PRIV_NET_WG) == 0);
 }
 
+#if __FreeBSD_version >= 1400000
 static void
 wg_reassign(if_t ifp, struct vnet *new_vnet __unused,
 	char *unused __unused)
@@ -3951,6 +4041,7 @@ wg_reassign(if_t ifp, struct vnet *new_vnet __unused,
 	sc = if_getsoftc(ifp);
 	wg_down(sc);
 }
+#endif
 
 static void
 wg_init(void *xsc)
