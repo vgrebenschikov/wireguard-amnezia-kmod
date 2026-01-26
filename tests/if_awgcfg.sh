@@ -386,45 +386,38 @@ mtu_body()
 
 	# check default MTU set on interface
 	atf_check -s exit:0 -o match:" mtu 1420" jexec wgtest1 ifconfig $wg1
-	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg
+	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg -ac
 
 	# check kernel warning if set MTU too big
-	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
 	atf_check -s exit:0 -o ignore jexec wgtest1 ifconfig $wg1 mtu 1500
-	atf_check -s exit:0 -o match:"MTU is too big 1500 tunnel packet may be 1568 with s4=0, suggested MTU to 1424" dmesg
+	atf_check -s exit:0 -o match:"MTU is too big 1500 tunnel packet may be 1568 with s4=0, suggested MTU to 1424" dmesg -ac
 
 	# check no kernel warning if set MTU to suggested value
-	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
 	atf_check -s exit:0 -o ignore jexec wgtest1 ifconfig $wg1 mtu 1424
-	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg
+	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg -ac
 	atf_check -s exit:0 -o match:" mtu 1424" jexec wgtest1 ifconfig $wg1
 
 	s4=10
-	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
 	atf_check -s exit:0 -o ignore jexec wgtest1 awg set $wg1 s4 $s4
-	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg
+	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg -ac
 	atf_check -s exit:0 -o match:" mtu 1424" jexec wgtest1 ifconfig $wg1
 
 	s4=20
-	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
 	atf_check -s exit:0 -o ignore jexec wgtest1 awg set $wg1 s4 $s4
-	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg
+	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg -ac
 	atf_check -s exit:0 -o match:" mtu 1408" jexec wgtest1 ifconfig $wg1
 
 	# set matching MTU -> no warning
-	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
 	atf_check -s exit:0 -o ignore jexec wgtest1 ifconfig $wg1 mtu 1408
-	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg
+	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg -ac
 
 	# set bigger MTU -> warning
-	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
 	atf_check -s exit:0 -o ignore jexec wgtest1 ifconfig $wg1 mtu 1410
-	atf_check -s exit:0 -o match:"MTU is too big 1410 tunnel packet may be 1508 with s4=20, suggested MTU to 1408" dmesg
+	atf_check -s exit:0 -o match:"MTU is too big 1410 tunnel packet may be 1508 with s4=20, suggested MTU to 1408" dmesg -ac
 
 	s4=57
-	atf_check -s exit:0 -o ignore sysctl kern.msgbuf_clear=1
 	atf_check -s exit:0 -o ignore jexec wgtest1 awg set $wg1 s4 $s4
-	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg
+	atf_check -s exit:0 -o not-match:"MTU is too big" dmesg -ac
 	atf_check -s exit:0 -o match:" mtu 1376" jexec wgtest1 ifconfig $wg1
 }
 
