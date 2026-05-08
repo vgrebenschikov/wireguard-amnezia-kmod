@@ -2438,6 +2438,8 @@ wg_input(struct mbuf *m, int offset, struct inpcb *inpcb,
 	uint32_t pkt_type = wg_match_input_skipping_junk(&m, sc);
 	if (!pkt_type || m == NULL) {
 		if_inc_counter(sc->sc_ifp, IFCOUNTER_IQDROPS, 1);
+		if (m != NULL)
+			m_freem(m);
 #if __FreeBSD_version >= 1400000
 		return true;
 #else
