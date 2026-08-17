@@ -635,6 +635,85 @@ wg_allowedip_incremental_stealing_cleanup()
 	vnet_cleanup
 }
 
+atf_test_case "wg_bad_decrypt" "cleanup"
+wg_bad_decrypt_head()
+{
+	atf_set descr 'Create a wg(4) tunnel over an epair and inject a decryption error'
+	atf_set require.user root
+	atf_set require.kmods if_wg
+}
+
+wg_bad_decrypt_body()
+{
+	local epair pri1 pri2 pub1 pub2 wg1 wg2
+	local endpoint1 endpoint2 tunnel1 tunnel2
+
+	sysctl -n debug.fail_point.crypto.inject_badmsg > /dev/null 2>&1 ||
+	    atf_skip "This test requires the OCF inject_badmsg fail point"
+
+	pri1=$(wg genkey)
+	pri2=$(wg genkey)
+
+	endpoint1=192.168.2.1
+	endpoint2=192.168.2.2
+	tunnel1=169.254.0.1
+	tunnel2=169.254.0.2
+
+	epair=$(vnet_mkepair)
+
+	vnet_init
+
+	vnet_mkjail wgtest1 ${epair}a
+	vnet_mkjail wgtest2 ${epair}b
+
+	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
+	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
+
+	wg1=$(jexec wgtest1 ifconfig wg create)
+	echo "$pri1" | jexec wgtest1 wg set $wg1 listen-port 12345 \
+	    private-key /dev/stdin
+	pub1=$(jexec wgtest1 wg show $wg1 public-key)
+	wg2=$(jexec wgtest2 ifconfig wg create)
+	echo "$pri2" | jexec wgtest2 wg set $wg2 listen-port 12345 \
+	    private-key /dev/stdin
+	pub2=$(jexec wgtest2 wg show $wg2 public-key)
+
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest1 wg set $wg1 peer "$pub2" \
+	    endpoint ${endpoint2}:12345 allowed-ips ${tunnel2}/32
+	atf_check -s exit:0 \
+	    jexec wgtest1 ifconfig $wg1 inet ${tunnel1}/24 up
+
+	atf_check -s exit:0 -o ignore \
+	    jexec wgtest2 wg set $wg2 peer "$pub1" \
+	    endpoint ${endpoint1}:12345 allowed-ips ${tunnel1}/32
+	atf_check -s exit:0 \
+	    jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up
+
+	# Generous timeout since the handshake takes some time.
+	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 -t 5 $tunnel2
+
+	# No receive errors before injection
+	ierrs=$(netstat -j wgtest2 -I $wg2 --libxo json,pretty | \
+	    awk '/received-errors/ { print $2 }')
+	atf_check_equal "0," "$ierrs"
+
+	# Trigger a decryption error
+	atf_check -s exit:0 -o ignore \
+	    sysctl debug.fail_point.crypto.inject_badmsg="1*return"
+
+	atf_check -s exit:2 -o ignore jexec wgtest1 ping -c 1 -t 5 $tunnel2
+
+	ierrs=$(netstat -j wgtest2 -I $wg2 --libxo json,pretty | \
+	    awk '/received-errors/ { print $2 }')
+	atf_check_equal "1," "$ierrs"
+}
+
+wg_bad_decrypt_cleanup()
+{
+	vnet_cleanup
+}
+
 atf_init_test_cases()
 {
 	atf_add_test_case "wg_basic"
@@ -646,4 +725,5 @@ atf_init_test_cases()
 	atf_add_test_case "wg_allowedip_incremental"
 	atf_add_test_case "wg_allowedip_incremental_inet6"
 	atf_add_test_case "wg_allowedip_incremental_stealing"
+	atf_add_test_case "wg_bad_decrypt"
 }
