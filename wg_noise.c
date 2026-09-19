@@ -40,7 +40,6 @@
 /* Constants for the keypair */
 #define REKEY_AFTER_MESSAGES	(1ull << 60)
 #define REJECT_AFTER_MESSAGES	(UINT64_MAX - COUNTER_WINDOW_SIZE - 1)
-#define REKEY_AFTER_TIME	120
 #define REKEY_AFTER_TIME_RECV	165
 #define REJECT_INTERVAL		(1000000000 / 50) /* fifty times per sec */
 /* 24 = floor(log2(REJECT_INTERVAL)) */
@@ -540,11 +539,11 @@ noise_remote_keys(struct noise_remote *r, uint8_t public[NOISE_PUBLIC_KEY_LEN],
 }
 
 int
-noise_remote_initiation_expired(struct noise_remote *r)
+noise_remote_initiation_expired(struct noise_remote *r, uint16_t rekey_timeout)
 {
 	int expired;
 	rw_rlock(&r->r_handshake_lock);
-	expired = noise_timer_expired(r->r_last_sent, REKEY_TIMEOUT, 0);
+	expired = noise_timer_expired(r->r_last_sent, rekey_timeout, 0);
 	rw_runlock(&r->r_handshake_lock);
 	return (expired);
 }
@@ -699,7 +698,7 @@ noise_keypair_lookup(struct noise_local *l, uint32_t idx0)
 }
 
 struct noise_keypair *
-noise_keypair_current(struct noise_remote *r)
+noise_keypair_current(struct noise_remote *r, uint16_t reject_after_time)
 {
 	struct epoch_tracker et;
 	struct noise_keypair *kp, *ret = NULL;
@@ -707,7 +706,7 @@ noise_keypair_current(struct noise_remote *r)
 	NET_EPOCH_ENTER(et);
 	kp = atomic_load_ptr(&r->r_current);
 	if (kp != NULL && atomic_load_bool(&kp->kp_can_send)) {
-		if (noise_timer_expired(kp->kp_birthdate, REJECT_AFTER_TIME, 0))
+		if (noise_timer_expired(kp->kp_birthdate, reject_after_time, 0))
 			atomic_store_bool(&kp->kp_can_send, false);
 		else if (refcount_acquire_if_not_zero(&kp->kp_refcnt))
 			ret = kp;
@@ -855,7 +854,7 @@ error:
 }
 
 int
-noise_keep_key_fresh_send(struct noise_remote *r)
+noise_keep_key_fresh_send(struct noise_remote *r, uint16_t rekey_after_time)
 {
 	struct epoch_tracker et;
 	struct noise_keypair *current;
@@ -877,7 +876,8 @@ noise_keep_key_fresh_send(struct noise_remote *r)
 	keep_key_fresh = nonce > REKEY_AFTER_MESSAGES;
 	if (keep_key_fresh)
 		goto out;
-	keep_key_fresh = current->kp_is_initiator && noise_timer_expired(current->kp_birthdate, REKEY_AFTER_TIME, 0);
+	keep_key_fresh = current->kp_is_initiator && noise_timer_expired(
+	    current->kp_birthdate, rekey_after_time, 0);
 
 out:
 	NET_EPOCH_EXIT(et);
@@ -885,7 +885,7 @@ out:
 }
 
 int
-noise_keep_key_fresh_recv(struct noise_remote *r)
+noise_keep_key_fresh_recv(struct noise_remote *r, uint16_t refresh_after_time)
 {
 	struct epoch_tracker et;
 	struct noise_keypair *current;
@@ -895,7 +895,7 @@ noise_keep_key_fresh_recv(struct noise_remote *r)
 	current = atomic_load_ptr(&r->r_current);
 	keep_key_fresh = current != NULL && atomic_load_bool(&current->kp_can_send) &&
 	    current->kp_is_initiator && noise_timer_expired(current->kp_birthdate,
-	    REJECT_AFTER_TIME - KEEPALIVE_TIMEOUT - REKEY_TIMEOUT, 0);
+	    refresh_after_time, 0);
 	NET_EPOCH_EXIT(et);
 
 	return (keep_key_fresh ? ESTALE : 0);
@@ -915,7 +915,8 @@ noise_keypair_encrypt(struct noise_keypair *kp, uint32_t *r_idx, uint64_t nonce,
 }
 
 int
-noise_keypair_decrypt(struct noise_keypair *kp, uint64_t nonce, struct mbuf *m)
+noise_keypair_decrypt(struct noise_keypair *kp, uint64_t nonce, struct mbuf *m,
+    uint16_t reject_after_time)
 {
 	uint64_t cur_nonce;
 	int ret;
@@ -929,7 +930,7 @@ noise_keypair_decrypt(struct noise_keypair *kp, uint64_t nonce, struct mbuf *m)
 #endif
 
 	if (cur_nonce >= REJECT_AFTER_MESSAGES ||
-	    noise_timer_expired(kp->kp_birthdate, REJECT_AFTER_TIME, 0))
+	    noise_timer_expired(kp->kp_birthdate, reject_after_time, 0))
 		return (EINVAL);
 
 	ret = chacha20poly1305_decrypt_mbuf(m, nonce, kp->kp_recv);
@@ -942,10 +943,11 @@ noise_keypair_decrypt(struct noise_keypair *kp, uint64_t nonce, struct mbuf *m)
 /* Handshake functions */
 int
 noise_create_initiation(struct noise_remote *r,
-    uint32_t *s_idx,
-    uint8_t ue[NOISE_PUBLIC_KEY_LEN],
-    uint8_t es[NOISE_PUBLIC_KEY_LEN + NOISE_AUTHTAG_LEN],
-    uint8_t ets[NOISE_TIMESTAMP_LEN + NOISE_AUTHTAG_LEN])
+	uint32_t *s_idx,
+	uint8_t ue[NOISE_PUBLIC_KEY_LEN],
+	uint8_t es[NOISE_PUBLIC_KEY_LEN + NOISE_AUTHTAG_LEN],
+	uint8_t ets[NOISE_TIMESTAMP_LEN + NOISE_AUTHTAG_LEN],
+	uint16_t rekey_timeout)
 {
 	struct noise_handshake *hs = &r->r_handshake;
 	struct noise_local *l = r->r_local;
@@ -956,7 +958,7 @@ noise_create_initiation(struct noise_remote *r,
 	rw_wlock(&r->r_handshake_lock);
 	if (!l->l_has_identity)
 		goto error;
-	if (!noise_timer_expired(r->r_last_sent, REKEY_TIMEOUT, 0))
+	if (!noise_timer_expired(r->r_last_sent, rekey_timeout, 0))
 		goto error;
 	noise_param_init(hs->hs_ck, hs->hs_hash, r->r_public);
 

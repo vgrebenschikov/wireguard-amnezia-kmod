@@ -59,6 +59,7 @@
 #include "sys/types.h"
 #include "wg_noise.h"
 #include "wg_cookie.h"
+#include "awg_crypto.h"
 #include "version.h"
 #include "if_wg.h"
 
@@ -94,6 +95,8 @@
 #endif
 
 #define AWG_PACKET_S4_MAX_SIZE	160
+#define AWG_DEFAULT_UDP_WINDOW	500
+#define AWG_DATA_MIN_SIZE	(sizeof(struct wg_pkt_data) + NOISE_AUTHTAG_LEN)
 
 #define AWG_S1 0
 #define AWG_S2 1
@@ -136,6 +139,12 @@
 
 #define WG_PKT_PADDING		16
 #define WG_KEY_SIZE		32
+#define WG_HEADER_PROTECTION_NONCE_SIZE 12
+
+struct wg_u16_range {
+	uint16_t min;
+	uint16_t max;
+};
 
 struct wg_pkt_initiation {
 	uint32_t		t;
@@ -248,6 +257,8 @@ struct wg_peer {
 	bool				 p_enabled;
 	bool				 p_need_another_keepalive;
 	uint16_t			 p_persistent_keepalive_interval;
+	uint32_t			 p_persistent_keepalive_range;
+	uint32_t			 p_udp_window;
 	struct callout			 p_new_handshake;
 	struct callout			 p_send_keepalive;
 	struct callout			 p_retry_handshake;
@@ -257,6 +268,7 @@ struct wg_peer {
 	struct mtx			 p_handshake_mtx;
 	struct timespec			 p_handshake_complete;	/* nanotime */
 	int				 p_handshake_retries;
+	uint16_t			 p_max_handshake_attempts;
 
 	struct grouptask		 p_send;
 	struct grouptask		 p_recv;
@@ -281,7 +293,93 @@ struct wg_amnezia {
 	uint32_t	am_s[4];						// Sx
 	wg_hdr_pair	am_h[4];						// Hx
 	char	   *am_i[5];						// Ix
+	uint8_t	am_header_protection_key[WG_KEY_SIZE];
+	bool	am_has_header_protection_key;
+	struct wg_u16_range am_content_padding_addition;
+	struct wg_u16_range am_rekey_after_time;
+	struct wg_u16_range am_rekey_timeout;
+	struct wg_u16_range am_reject_after_time;
+	struct wg_u16_range am_keepalive_timeout;
+	struct wg_u16_range am_max_handshake_attempts;
+	bool	am_random_trailers;
+	bool	am_disable_cookies;
 };
+
+static inline struct wg_u16_range
+wg_u16_range_unpack(uint32_t value)
+{
+	return ((struct wg_u16_range){
+		.min = (uint16_t)value,
+		.max = (uint16_t)(value >> 16),
+	});
+}
+
+static inline uint32_t
+wg_u16_range_pack(struct wg_u16_range value)
+{
+	return ((uint32_t)value.max << 16 | value.min);
+}
+
+static uint16_t
+wg_u16_range_pick(struct wg_u16_range range, uint16_t fallback)
+{
+	if (range.min == 0 && range.max == 0)
+		return (fallback);
+	if (range.min == range.max)
+		return (range.min);
+	return (range.min + arc4random_uniform((uint32_t)range.max - range.min + 1));
+}
+
+static uint16_t
+wg_u16_range_min(struct wg_u16_range range, uint16_t fallback)
+{
+	return (range.min == 0 && range.max == 0 ? fallback : range.min);
+}
+
+static uint16_t
+wg_u16_range_max(struct wg_u16_range range, uint16_t fallback)
+{
+	return (range.min == 0 && range.max == 0 ? fallback : range.max);
+}
+
+static uint16_t
+wg_rekey_timeout_min(struct wg_amnezia *am)
+{
+	return (wg_u16_range_min(am->am_rekey_timeout,
+	    REKEY_TIMEOUT));
+}
+
+static uint16_t
+wg_rekey_timeout_pick(struct wg_amnezia *am)
+{
+	return (wg_u16_range_pick(am->am_rekey_timeout,
+	    REKEY_TIMEOUT));
+}
+
+static uint16_t
+wg_reject_after_time(struct wg_amnezia *am)
+{
+	return (wg_u16_range_max(am->am_reject_after_time,
+	    REJECT_AFTER_TIME));
+}
+
+static uint16_t
+wg_keepalive_timeout_pick(struct wg_amnezia *am)
+{
+	return (wg_u16_range_pick(am->am_keepalive_timeout,
+	    KEEPALIVE_TIMEOUT));
+}
+
+static uint16_t
+wg_key_refresh_recv_time(struct wg_amnezia *am)
+{
+	int timeout = wg_u16_range_pick(am->am_reject_after_time,
+	    REJECT_AFTER_TIME) -
+	    wg_u16_range_min(am->am_keepalive_timeout,
+	    KEEPALIVE_TIMEOUT) - wg_rekey_timeout_min(am);
+
+	return ((uint16_t)MAX(timeout, 0));
+}
 
 struct wg_socket {
 	struct socket	*so_so4;
@@ -507,6 +605,9 @@ wg_peer_create(struct wg_softc *sc, const uint8_t pub_key[WG_KEY_SIZE],
 	peer->p_enabled = false;
 	peer->p_need_another_keepalive = false;
 	peer->p_persistent_keepalive_interval = 0;
+	peer->p_persistent_keepalive_range = 0;
+	peer->p_udp_window = AWG_DEFAULT_UDP_WINDOW;
+	peer->p_max_handshake_attempts = MAX_TIMER_HANDSHAKES;
 	callout_init(&peer->p_new_handshake, true);
 	callout_init(&peer->p_send_keepalive, true);
 	callout_init(&peer->p_retry_handshake, true);
@@ -1161,22 +1262,34 @@ static void
 wg_send_buf_junk(struct wg_softc *sc, struct wg_endpoint *e, uint8_t *buf, size_t len, size_t junk_len)
 {
 	uint8_t *junk_buf;
-	size_t total_len;
+	size_t total_len, trailer_len = 0;
 
-	if (junk_len == 0) {
+	if (sc->sc_amnezia.am_random_trailers &&
+	    junk_len + len < AWG_DEFAULT_UDP_WINDOW)
+		trailer_len = arc4random_uniform(
+		    AWG_DEFAULT_UDP_WINDOW - junk_len - len);
+
+	if (junk_len == 0 && trailer_len == 0 &&
+	    !sc->sc_amnezia.am_has_header_protection_key) {
 		wg_send_buf(sc, e, buf, len);
 		return;
 	}
 
-	total_len = len + junk_len;
+	total_len = len + junk_len + trailer_len;
 	junk_buf = malloc(total_len, M_DEVBUF, M_NOWAIT);
 	if (junk_buf == NULL) {
-		wg_send_buf(sc, e, buf, len);
+		if (!sc->sc_amnezia.am_has_header_protection_key)
+			wg_send_buf(sc, e, buf, len);
 		return;
 	}
 
 	arc4random_buf(junk_buf, junk_len);
 	memcpy(junk_buf + junk_len, buf, len);
+	if (sc->sc_amnezia.am_has_header_protection_key)
+		awg_chacha20_ietf_xor(junk_buf + junk_len, len, junk_buf,
+		    sc->sc_amnezia.am_header_protection_key);
+	if (trailer_len != 0)
+		arc4random_buf(junk_buf + junk_len + len, trailer_len);
 
 	wg_send_buf(sc, e, junk_buf, total_len);
 
@@ -1243,11 +1356,14 @@ static void
 wg_timers_event_data_sent(struct wg_peer *peer)
 {
 	struct epoch_tracker et;
+	uint32_t timeout = wg_rekey_timeout_pick(&peer->p_sc->sc_amnezia) +
+	    wg_u16_range_max(peer->p_sc->sc_amnezia.am_keepalive_timeout,
+	    KEEPALIVE_TIMEOUT);
 	NET_EPOCH_ENTER(et);
 	if (atomic_load_bool(&peer->p_enabled) &&
 		!callout_pending(&peer->p_new_handshake))
 		callout_reset(&peer->p_new_handshake, MSEC_2_TICKS(
-			NEW_HANDSHAKE_TIMEOUT * 1000 +
+			timeout * 1000 +
 			arc4random_uniform(REKEY_TIMEOUT_JITTER)),
 			wg_timers_run_new_handshake, peer);
 	NET_EPOCH_EXIT(et);
@@ -1257,11 +1373,12 @@ static void
 wg_timers_event_data_received(struct wg_peer *peer)
 {
 	struct epoch_tracker et;
+	uint16_t timeout = wg_keepalive_timeout_pick(&peer->p_sc->sc_amnezia);
 	NET_EPOCH_ENTER(et);
 	if (atomic_load_bool(&peer->p_enabled)) {
 		if (!callout_pending(&peer->p_send_keepalive))
 			callout_reset(&peer->p_send_keepalive,
-				MSEC_2_TICKS(KEEPALIVE_TIMEOUT * 1000),
+				MSEC_2_TICKS(timeout * 1000),
 				wg_timers_run_send_keepalive, peer);
 		else
 			atomic_store_bool(&peer->p_need_another_keepalive,
@@ -1287,8 +1404,11 @@ wg_timers_event_any_authenticated_packet_traversal(struct wg_peer *peer)
 {
 	struct epoch_tracker et;
 	uint16_t interval;
+	struct wg_u16_range range;
 	NET_EPOCH_ENTER(et);
-	interval = atomic_load_16(&peer->p_persistent_keepalive_interval);
+	range = wg_u16_range_unpack(atomic_load_32(&peer->p_persistent_keepalive_range));
+	interval = wg_u16_range_pick(range, 0);
+	atomic_store_16(&peer->p_persistent_keepalive_interval, interval);
 	if (atomic_load_bool(&peer->p_enabled) && interval > 0)
 		callout_reset(&peer->p_persistent_keepalive,
 			 MSEC_2_TICKS(interval * 1000),
@@ -1300,10 +1420,11 @@ static void
 wg_timers_event_handshake_initiated(struct wg_peer *peer)
 {
 	struct epoch_tracker et;
+	uint16_t timeout = wg_rekey_timeout_pick(&peer->p_sc->sc_amnezia);
 	NET_EPOCH_ENTER(et);
 	if (atomic_load_bool(&peer->p_enabled))
 		callout_reset(&peer->p_retry_handshake, MSEC_2_TICKS(
-			REKEY_TIMEOUT * 1000 +
+			timeout * 1000 +
 			arc4random_uniform(REKEY_TIMEOUT_JITTER)),
 			wg_timers_run_retry_handshake, peer);
 	NET_EPOCH_EXIT(et);
@@ -1318,6 +1439,9 @@ wg_timers_event_handshake_complete(struct wg_peer *peer)
 		mtx_lock(&peer->p_handshake_mtx);
 		callout_stop(&peer->p_retry_handshake);
 		peer->p_handshake_retries = 0;
+		peer->p_max_handshake_attempts = wg_u16_range_pick(
+		    peer->p_sc->sc_amnezia.am_max_handshake_attempts,
+		    MAX_TIMER_HANDSHAKES);
 		getnanotime(&peer->p_handshake_complete);
 		mtx_unlock(&peer->p_handshake_mtx);
 		wg_timers_run_send_keepalive(peer);
@@ -1329,10 +1453,11 @@ static void
 wg_timers_event_session_derived(struct wg_peer *peer)
 {
 	struct epoch_tracker et;
+	uint16_t timeout = wg_reject_after_time(&peer->p_sc->sc_amnezia);
 	NET_EPOCH_ENTER(et);
 	if (atomic_load_bool(&peer->p_enabled))
 		callout_reset(&peer->p_zero_key_material,
-			MSEC_2_TICKS(REJECT_AFTER_TIME * 3 * 1000),
+			MSEC_2_TICKS(timeout * 3 * 1000),
 			wg_timers_run_zero_key_material, peer);
 	NET_EPOCH_EXIT(et);
 }
@@ -1350,9 +1475,14 @@ wg_timers_event_want_initiation(struct wg_peer *peer)
 static void
 wg_timers_run_send_initiation(struct wg_peer *peer, bool is_retry)
 {
-	if (!is_retry)
+	if (!is_retry) {
 		peer->p_handshake_retries = 0;
-	if (noise_remote_initiation_expired(peer->p_remote) == ETIMEDOUT)
+		peer->p_max_handshake_attempts = wg_u16_range_pick(
+		    peer->p_sc->sc_amnezia.am_max_handshake_attempts,
+		    MAX_TIMER_HANDSHAKES);
+	}
+	if (noise_remote_initiation_expired(peer->p_remote,
+	    wg_rekey_timeout_min(&peer->p_sc->sc_amnezia)) == ETIMEDOUT)
 		wg_send_initiation(peer);
 }
 
@@ -1361,15 +1491,18 @@ wg_timers_run_retry_handshake(void *_peer)
 {
 	struct epoch_tracker et;
 	struct wg_peer *peer = _peer;
+	uint16_t max_attempts = peer->p_max_handshake_attempts;
+	uint16_t rekey_timeout = wg_rekey_timeout_pick(&peer->p_sc->sc_amnezia);
+	uint16_t reject_after = wg_reject_after_time(&peer->p_sc->sc_amnezia);
 
 	mtx_lock(&peer->p_handshake_mtx);
-	if (peer->p_handshake_retries <= MAX_TIMER_HANDSHAKES) {
+	if (peer->p_handshake_retries <= max_attempts) {
 		peer->p_handshake_retries++;
 		mtx_unlock(&peer->p_handshake_mtx);
 
 		DPRINTF(peer->p_sc, "Handshake for peer %" PRIu64 " did not complete "
 			"after %d seconds, retrying (try %d)\n", peer->p_id,
-			REKEY_TIMEOUT, peer->p_handshake_retries + 1);
+			rekey_timeout, peer->p_handshake_retries + 1);
 		wg_peer_clear_src(peer);
 		wg_timers_run_send_initiation(peer, true);
 	} else {
@@ -1377,7 +1510,7 @@ wg_timers_run_retry_handshake(void *_peer)
 
 		DPRINTF(peer->p_sc, "Handshake for peer %" PRIu64 " did not complete "
 			"after %d retries, giving up\n", peer->p_id,
-			MAX_TIMER_HANDSHAKES + 2);
+			max_attempts + 2);
 
 		callout_stop(&peer->p_send_keepalive);
 		wg_queue_purge(&peer->p_stage_queue);
@@ -1385,7 +1518,7 @@ wg_timers_run_retry_handshake(void *_peer)
 		if (atomic_load_bool(&peer->p_enabled) &&
 			!callout_pending(&peer->p_zero_key_material))
 			callout_reset(&peer->p_zero_key_material,
-				MSEC_2_TICKS(REJECT_AFTER_TIME * 3 * 1000),
+				MSEC_2_TICKS(reject_after * 3 * 1000),
 				wg_timers_run_zero_key_material, peer);
 		NET_EPOCH_EXIT(et);
 	}
@@ -1396,6 +1529,7 @@ wg_timers_run_send_keepalive(void *_peer)
 {
 	struct epoch_tracker et;
 	struct wg_peer *peer = _peer;
+	uint16_t timeout = wg_keepalive_timeout_pick(&peer->p_sc->sc_amnezia);
 
 	wg_send_keepalive(peer);
 	NET_EPOCH_ENTER(et);
@@ -1403,7 +1537,7 @@ wg_timers_run_send_keepalive(void *_peer)
 		atomic_load_bool(&peer->p_need_another_keepalive)) {
 		atomic_store_bool(&peer->p_need_another_keepalive, false);
 		callout_reset(&peer->p_send_keepalive,
-			MSEC_2_TICKS(KEEPALIVE_TIMEOUT * 1000),
+			MSEC_2_TICKS(timeout * 1000),
 			wg_timers_run_send_keepalive, peer);
 	}
 	NET_EPOCH_EXIT(et);
@@ -1413,10 +1547,13 @@ static void
 wg_timers_run_new_handshake(void *_peer)
 {
 	struct wg_peer *peer = _peer;
+	uint32_t timeout = wg_rekey_timeout_pick(&peer->p_sc->sc_amnezia) +
+	    wg_u16_range_max(peer->p_sc->sc_amnezia.am_keepalive_timeout,
+	    KEEPALIVE_TIMEOUT);
 
 	DPRINTF(peer->p_sc, "Retrying handshake with peer %" PRIu64 " because we "
-		"stopped hearing back after %d seconds\n",
-		peer->p_id, NEW_HANDSHAKE_TIMEOUT);
+		"stopped hearing back after %u seconds\n",
+		peer->p_id, timeout);
 
 	wg_peer_clear_src(peer);
 	wg_timers_run_send_initiation(peer, false);
@@ -1426,10 +1563,11 @@ static void
 wg_timers_run_zero_key_material(void *_peer)
 {
 	struct wg_peer *peer = _peer;
+	uint16_t timeout = wg_reject_after_time(&peer->p_sc->sc_amnezia);
 
 	DPRINTF(peer->p_sc, "Zeroing out keys for peer %" PRIu64 ", since we "
 		"haven't received a new one in %d seconds\n",
-		peer->p_id, REJECT_AFTER_TIME * 3);
+		peer->p_id, timeout * 3);
 	noise_remote_keypairs_clear(peer->p_remote);
 }
 
@@ -1437,8 +1575,10 @@ static void
 wg_timers_run_persistent_keepalive(void *_peer)
 {
 	struct wg_peer *peer = _peer;
+	struct wg_u16_range range;
 
-	if (atomic_load_16(&peer->p_persistent_keepalive_interval) > 0)
+	range = wg_u16_range_unpack(atomic_load_32(&peer->p_persistent_keepalive_range));
+	if (range.min != 0 || range.max != 0)
 		wg_send_keepalive(peer);
 }
 
@@ -1459,17 +1599,23 @@ static void
 wg_peer_send_buf_junk(struct wg_peer *peer, uint8_t *buf, size_t len, size_t junk_len)
 {
 	uint8_t *junk_buf;
-	size_t total_len;
+	size_t total_len, trailer_len = 0;
+	struct wg_softc *sc = peer->p_sc;
 
-	if (junk_len == 0) {
+	if (sc->sc_amnezia.am_random_trailers &&
+	    junk_len + len < atomic_load_32(&peer->p_udp_window))
+		trailer_len = arc4random_uniform(
+		    atomic_load_32(&peer->p_udp_window) - junk_len - len);
+
+	if (junk_len == 0 && trailer_len == 0 &&
+	    !sc->sc_amnezia.am_has_header_protection_key) {
 		wg_peer_send_buf(peer, buf, len);
 		return;
 	}
 
-	total_len = len + junk_len;
+	total_len = len + junk_len + trailer_len;
 
 #ifdef AWG2_JUNK_AFTER_HANDSHAKE
-	struct wg_softc *sc = peer->p_sc;
 	size_t post_junk_len = 0;
 
 	/* if AWG2 - send post-junk data */
@@ -1490,10 +1636,16 @@ wg_peer_send_buf_junk(struct wg_peer *peer, uint8_t *buf, size_t len, size_t jun
 
 #ifdef AWG2_JUNK_AFTER_HANDSHAKE
 	if (post_junk_len)
-		arc4random_buf(junk_buf + junk_len + len, post_junk_len);
+		arc4random_buf(junk_buf + junk_len + len + trailer_len,
+		    post_junk_len);
 #endif
 
 	memcpy(junk_buf + junk_len, buf, len);
+	if (sc->sc_amnezia.am_has_header_protection_key)
+		awg_chacha20_ietf_xor(junk_buf + junk_len, len, junk_buf,
+		    sc->sc_amnezia.am_header_protection_key);
+	if (trailer_len != 0)
+		arc4random_buf(junk_buf + junk_len + len, trailer_len);
 
 	wg_peer_send_buf(peer, junk_buf, total_len);
 
@@ -1564,7 +1716,7 @@ wg_send_initiation(struct wg_peer *peer)
 	wg_send_junk_packets(peer);
 
 	if (noise_create_initiation(peer->p_remote, &pkt.s_idx, pkt.ue,
-		pkt.es, pkt.ets) != 0)
+		pkt.es, pkt.ets, wg_rekey_timeout_min(&sc->sc_amnezia)) != 0)
 		return;
 
 	DPRINTF(sc, "Sending handshake initiation to peer %" PRIu64 "\n", peer->p_id);
@@ -1601,6 +1753,9 @@ wg_send_cookie(struct wg_softc *sc, struct cookie_macs *cm, uint32_t idx,
 	struct wg_endpoint *e)
 {
 	struct wg_pkt_cookie	pkt;
+
+	if (sc->sc_amnezia.am_disable_cookies)
+		return;
 
 	DPRINTF(sc, "Sending cookie response for denied handshake message\n");
 
@@ -1656,6 +1811,8 @@ wg_handshake(struct wg_softc *sc, struct wg_packet *pkt)
 		if (!underload)
 			wg_last_underload = 0;
 	}
+	if (sc->sc_amnezia.am_disable_cookies)
+		underload = false;
 
 	m = pkt->p_mbuf;
 	e = &pkt->p_endpoint;
@@ -1845,10 +2002,46 @@ calculate_padding(struct wg_packet *pkt)
 	return (padded_size - last_unit);
 }
 
+static bool
+wg_mbuf_append_zeros(struct mbuf *m, unsigned int len)
+{
+	static const uint8_t zeros[64] = { 0 };
+
+	while (len != 0) {
+		unsigned int chunk = MIN(len, sizeof(zeros));
+		if (!m_append(m, chunk, (c_caddr_t)zeros))
+			return (false);
+		len -= chunk;
+	}
+	return (true);
+}
+
+static unsigned int
+wg_transport_padding(struct wg_peer *peer, struct wg_packet *pkt,
+    unsigned int packet_size)
+{
+	struct wg_softc *sc = peer->p_sc;
+	struct wg_u16_range addition = sc->sc_amnezia.am_content_padding_addition;
+	uint32_t window = atomic_load_32(&peer->p_udp_window);
+	unsigned int space;
+
+	if (addition.min != 0 || addition.max != 0) {
+		if (window < packet_size)
+			return (0);
+		space = window - packet_size;
+		return (MIN((unsigned int)wg_u16_range_pick(addition, 0), space));
+	}
+	if (sc->sc_amnezia.am_random_trailers) {
+		if (window <= packet_size)
+			return (0);
+		return (arc4random_uniform(window - packet_size));
+	}
+	return (calculate_padding(pkt));
+}
+
 static void
 wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 {
-	static const uint8_t	 padding[WG_PKT_PADDING] = { 0 };
 	struct wg_pkt_data	*data;
 	struct wg_peer		*peer;
 	struct noise_remote	*remote;
@@ -1861,9 +2054,17 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	peer = noise_remote_arg(remote);
 	m = pkt->p_mbuf;
 
-	/* Pad the packet */
-	padlen = calculate_padding(pkt);
-	if (padlen != 0 && !m_append(m, padlen, padding))
+	/* Track the largest UDP payload needed by this peer before choosing
+	 * adaptive AWG padding. */
+	uint32_t udp_window = sc->sc_amnezia.am_s[AWG_S4] + AWG_DATA_MIN_SIZE +
+	    m->m_pkthdr.len;
+	if (atomic_load_32(&peer->p_udp_window) < udp_window)
+		atomic_store_32(&peer->p_udp_window, udp_window);
+
+	/* Pad the encrypted content. ContentPaddingAddition takes precedence
+	 * over RandomTrailers, matching the userspace implementation. */
+	padlen = wg_transport_padding(peer, pkt, udp_window);
+	if (padlen != 0 && !wg_mbuf_append_zeros(m, padlen))
 		goto out;
 
 	/* Do encryption */
@@ -1893,6 +2094,20 @@ wg_encrypt(struct wg_softc *sc, struct wg_packet *pkt)
 
 		arc4random_buf(mtod(m, uint8_t *), junk_size);
 	}
+	if (sc->sc_amnezia.am_has_header_protection_key) {
+		uint8_t protected_header[sizeof(struct wg_pkt_data)];
+		uint8_t nonce[WG_HEADER_PROTECTION_NONCE_SIZE];
+
+		m_copydata(m, 0, sizeof(nonce), (caddr_t)nonce);
+		m_copydata(m, junk_size, sizeof(protected_header),
+		    (caddr_t)protected_header);
+		awg_chacha20_ietf_xor(protected_header,
+		    sizeof(protected_header), nonce,
+		    sc->sc_amnezia.am_header_protection_key);
+		m_copyback(m, junk_size, sizeof(protected_header),
+		    (c_caddr_t)protected_header);
+		explicit_bzero(protected_header, sizeof(protected_header));
+	}
 
 	wg_mbuf_reset(m);
 	state = WG_PACKET_CRYPTED;
@@ -1920,8 +2135,14 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	pkt->p_nonce = le64toh(mtod(m, struct wg_pkt_data *)->nonce);
 	m_adj(m, sizeof(struct wg_pkt_data));
 
-	if (noise_keypair_decrypt(pkt->p_keypair, pkt->p_nonce, m) != 0)
+	if (noise_keypair_decrypt(pkt->p_keypair, pkt->p_nonce, m,
+	    wg_reject_after_time(&sc->sc_amnezia)) != 0)
 		goto out;
+
+	uint32_t udp_window = sc->sc_amnezia.am_s[AWG_S4] +
+	    sizeof(struct wg_pkt_data) + m->m_pkthdr.len;
+	if (atomic_load_32(&peer->p_udp_window) < udp_window)
+		atomic_store_32(&peer->p_udp_window, udp_window);
 
 	/* A packet with length 0 is a keepalive packet */
 	if (__predict_false(m->m_pkthdr.len == 0)) {
@@ -1942,14 +2163,18 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 			struct ip *ip = mtod(m, struct ip *);
 			allowed_peer = wg_aip_lookup(sc, AF_INET, &ip->ip_src);
 			len = ntohs(ip->ip_len);
-			if (len >= sizeof(struct ip) && len < m->m_pkthdr.len)
-				m_adj(m, len - m->m_pkthdr.len);
+			if (len >= sizeof(struct ip) && len < m->m_pkthdr.len) {
+				ssize_t extra = (ssize_t)len - (ssize_t)m->m_pkthdr.len;
+				m_adj(m, (int)extra);
+			}
 		} else if (pkt->p_af == AF_INET6) {
 			struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
 			allowed_peer = wg_aip_lookup(sc, AF_INET6, &ip6->ip6_src);
 			len = ntohs(ip6->ip6_plen) + sizeof(struct ip6_hdr);
-			if (len < m->m_pkthdr.len)
-				m_adj(m, len - m->m_pkthdr.len);
+			if (len < m->m_pkthdr.len) {
+				ssize_t extra = (ssize_t)len - (ssize_t)m->m_pkthdr.len;
+				m_adj(m, (int)extra);
+			}
 		} else
 			panic("determine_af_and_pullup returned unexpected value");
 	} else {
@@ -2050,7 +2275,9 @@ wg_deliver_out(struct wg_peer *peer)
 			goto error;
 		}
 		wg_packet_free(pkt);
-		if (noise_keep_key_fresh_send(peer->p_remote))
+		if (noise_keep_key_fresh_send(peer->p_remote,
+		    wg_u16_range_pick(sc->sc_amnezia.am_rekey_after_time,
+		    REKEY_AFTER_TIME)))
 			wg_timers_event_want_initiation(peer);
 		continue;
 error:
@@ -2149,7 +2376,8 @@ wg_deliver_in(struct wg_peer *peer)
 		wg_timers_event_data_received(peer);
 
 done:
-		if (noise_keep_key_fresh_recv(peer->p_remote))
+		if (noise_keep_key_fresh_recv(peer->p_remote,
+		    wg_key_refresh_recv_time(&sc->sc_amnezia)))
 			wg_timers_event_want_initiation(peer);
 		wg_packet_free(pkt);
 		continue;
@@ -2339,19 +2567,28 @@ wg_queue_dequeue_parallel(struct wg_queue *parallel)
 static uint32_t
 wg_match_pkt_skipping_junk(
 	struct mbuf **mptr,
+	struct wg_softc *sc,
 	size_t 		junk_size,
 	uint32_t	expected,
 	wg_hdr_pair hdr,
-	size_t		header_size)
+	size_t		message_size)
 {
-	size_t req_size = junk_size + sizeof(uint32_t);
+	size_t req_size = junk_size + (message_size != 0 ?
+	    sizeof(uint32_t) : sizeof(struct wg_pkt_data));
+	uint32_t t;
+	uint8_t nonce[WG_HEADER_PROTECTION_NONCE_SIZE];
 
 	/* required size is more then total packet size */
-	if (req_size >= (*mptr)->m_pkthdr.len)
+	if (req_size > (*mptr)->m_pkthdr.len)
 		return 0;
 
-	if (header_size && (*mptr)->m_pkthdr.len != header_size + junk_size)
-		return 0;
+	if (message_size != 0) {
+		if (sc->sc_amnezia.am_random_trailers) {
+			if ((*mptr)->m_pkthdr.len < message_size + junk_size)
+				return 0;
+		} else if ((*mptr)->m_pkthdr.len != message_size + junk_size)
+			return 0;
+	}
 
 	/* if not whole packet header in mbuf, pullup to required size */
 	if ((*mptr)->m_len < req_size) {
@@ -2362,14 +2599,39 @@ wg_match_pkt_skipping_junk(
 	}
 
 	/* check packet type */
-	uint32_t t = *(uint32_t *)mtodo(*mptr, junk_size);
+	memcpy(&t, mtodo(*mptr, junk_size), sizeof(t));
+	if (sc->sc_amnezia.am_has_header_protection_key) {
+		uint32_t type_mask = 0;
+
+		memcpy(nonce, mtod(*mptr, uint8_t *), sizeof(nonce));
+		awg_chacha20_ietf_xor((uint8_t *)&type_mask, sizeof(type_mask),
+		    nonce, sc->sc_amnezia.am_header_protection_key);
+		t ^= type_mask;
+	}
 	if (!WG_PKT_HDR_MATCH(hdr, t, expected))
 		return 0;
-
 
 	/* skip junk only once we identified packet type */
 	if (junk_size > 0)
 		m_adj(*mptr, junk_size);
+
+	/* Handshake trailers are deliberately outside the protected message. */
+	if (message_size != 0 && (*mptr)->m_pkthdr.len > message_size) {
+		ssize_t extra = (ssize_t)message_size - (ssize_t)(*mptr)->m_pkthdr.len;
+		m_adj(*mptr, (int)extra);
+	}
+
+	if (sc->sc_amnezia.am_has_header_protection_key) {
+		size_t protected_size = message_size != 0 ? message_size :
+		    sizeof(struct wg_pkt_data);
+		if ((*mptr)->m_len < protected_size) {
+			*mptr = m_pullup(*mptr, protected_size);
+			if (*mptr == NULL)
+				return 0;
+		}
+		awg_chacha20_ietf_xor(mtod(*mptr, uint8_t *), protected_size,
+		    nonce, sc->sc_amnezia.am_header_protection_key);
+	}
 
 	return expected;
 }
@@ -2383,6 +2645,7 @@ wg_match_input_skipping_junk(struct mbuf **mptr, struct wg_softc *sc)
 	for (size_t i = 0; *mptr && !matched && i < AWG_Hx; i++) {
 		matched = wg_match_pkt_skipping_junk(
 			mptr,
+			sc,
 			sc->sc_amnezia.am_s[i],
 			amnezia_structureres[i].ams_type,
 			sc->sc_amnezia.am_h[i],
@@ -2534,7 +2797,8 @@ wg_peer_send_staged(struct wg_peer *peer)
 	if (STAILQ_EMPTY(&list))
 		return;
 
-	if ((keypair = noise_keypair_current(peer->p_remote)) == NULL)
+	if ((keypair = noise_keypair_current(peer->p_remote,
+	    wg_reject_after_time(&sc->sc_amnezia))) == NULL)
 		goto error;
 
 	STAILQ_FOREACH(pkt, &list, p_parallel) {
@@ -2910,11 +3174,29 @@ wg_peer_add(struct wg_softc *sc, const nvlist_t *nvl)
 	}
 	if (nvlist_exists_number(nvl, "persistent-keepalive-interval")) {
 		uint64_t pki = nvlist_get_number(nvl, "persistent-keepalive-interval");
-		if (pki > UINT16_MAX) {
+		uint32_t packed;
+		struct wg_u16_range range;
+		if (pki > UINT32_MAX) {
 			err = EINVAL;
 			goto out;
 		}
-		wg_timers_set_persistent_keepalive(peer, pki);
+		/* AWG3 tools pack min/max into a u32. */
+#ifdef AWG2_CLIENT_COMPAT
+		/* AWG2 tools send a scalar u16. A non-zero packed range with
+		 * max == 0 is invalid, so the forms are unambiguous. */
+		packed = pki <= UINT16_MAX ?
+		    wg_u16_range_pack((struct wg_u16_range){
+		    .min = (uint16_t)pki, .max = (uint16_t)pki }) : (uint32_t)pki;
+#else
+		packed = (uint32_t)pki;
+#endif
+		range = wg_u16_range_unpack(packed);
+		if (range.min > range.max) {
+			err = EINVAL;
+			goto out;
+		}
+		atomic_store_32(&peer->p_persistent_keepalive_range, packed);
+		wg_timers_set_persistent_keepalive(peer, wg_u16_range_pick(range, 0));
 	}
 	if (nvlist_exists_nvlist_array(nvl, "allowed-ips")) {
 		const void *addr;
@@ -3214,10 +3496,12 @@ static int
 wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 {
 	uint8_t public[WG_KEY_SIZE], private[WG_KEY_SIZE];
+	uint8_t header_protection_key[WG_KEY_SIZE];
+	bool has_header_protection_key;
 	if_t ifp;
 	void *nvlpacked;
 	nvlist_t *nvl;
-	ssize_t size;
+	size_t size;
 	int err;
 
 	ifp = sc->sc_ifp;
@@ -3240,6 +3524,20 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		goto out;
 	}
 	sx_xlock(&sc->sc_lock);
+	memcpy(header_protection_key,
+	    sc->sc_amnezia.am_header_protection_key, WG_KEY_SIZE);
+	has_header_protection_key = sc->sc_amnezia.am_has_header_protection_key;
+	if (nvlist_exists_binary(nvl, "header-protection-key")) {
+		const void *key = nvlist_get_binary(nvl, "header-protection-key",
+		    &size);
+		if (size != WG_KEY_SIZE) {
+			err = EINVAL;
+			goto out_locked;
+		}
+		memcpy(header_protection_key, key, WG_KEY_SIZE);
+		has_header_protection_key = timingsafe_bcmp(header_protection_key,
+		    (uint8_t[WG_KEY_SIZE]){ 0 }, WG_KEY_SIZE) != 0;
+	}
 	if (nvlist_exists_bool(nvl, "replace-peers") &&
 		nvlist_get_bool(nvl, "replace-peers"))
 		wg_peer_destroy_all(sc);
@@ -3322,10 +3620,24 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		}
 	}
 
-	// assign Sx parameters
+	if (has_header_protection_key) {
+		for (int i = 0; i < AWG_Sx; i++) {
+			if (sx[i] < WG_HEADER_PROTECTION_NONCE_SIZE) {
+				DPRINTF(sc, "header protection requires s1-s4 >= %d\n",
+				    WG_HEADER_PROTECTION_NONCE_SIZE);
+				err = EINVAL;
+				goto out_locked;
+			}
+		}
+	}
+
+	// assign Sx parameters and the header-protection key together
 	for (int i = 0; i < AWG_Sx; i++) {
 		sc->sc_amnezia.am_s[i] = sx[i];
 	}
+	memcpy(sc->sc_amnezia.am_header_protection_key,
+	    header_protection_key, WG_KEY_SIZE);
+	sc->sc_amnezia.am_has_header_protection_key = has_header_protection_key;
 
 	struct {
 		char name[3];
@@ -3338,34 +3650,47 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		hparams[i].value = sc->sc_amnezia.am_h[i];
 		hparams[i].changed = false;
 
-		if (nvlist_exists_binary(nvl, hparams[i].name)) {
-			size_t size;
-			const char *value = nvlist_get_binary(nvl, hparams[i].name, &size);
-			if (value && size > 0 && value[size - 1] == '\0') {
-				char *endptr;
-				uint32_t val_min = strtoul(value, &endptr, 10);
-				uint32_t val_max = val_min;
+		if (nvlist_exists_number(nvl, hparams[i].name)) {
+			uint64_t value = nvlist_get_number(nvl, hparams[i].name);
+			hparams[i].value.min = (uint32_t)value;
+			hparams[i].value.max = (uint32_t)(value >> 32);
+			hparams[i].changed = true;
+		}
+#ifdef AWG2_CLIENT_COMPAT
+		else if (nvlist_exists_binary(nvl, hparams[i].name)) {
+			size_t value_size;
+			const char *value = nvlist_get_binary(nvl, hparams[i].name,
+			    &value_size);
+			char *endptr;
+			unsigned long val_min, val_max;
 
-				if (*endptr == '-') {
-					endptr++;
-					val_max = strtoul(endptr, &endptr, 10);
-				}
-
-				if (*endptr != '\0') {
-					DPRINTF(sc, "%s: %s is not a valid number or range\n", hparams[i].name, value);
-					err = EINVAL;
-					goto out_locked;
-				}
-
-				hparams[i].value.min = val_min;
-				hparams[i].value.max = val_max;
-				hparams[i].changed = true;
-		} else {
-				DPRINTF(sc, "%s: value is not a valid string\n", hparams[i].name);
+			if (value == NULL || value_size == 0 ||
+			    value[value_size - 1] != '\0') {
 				err = EINVAL;
 				goto out_locked;
 			}
+			val_min = strtoul(value, &endptr, 10);
+			val_max = val_min;
+			if (*endptr == '-') {
+				const char *max_value = ++endptr;
+				val_max = strtoul(max_value, &endptr, 10);
+				if (endptr == max_value) {
+					err = EINVAL;
+					goto out_locked;
+				}
+			}
+			if (endptr == value || *endptr != '\0' ||
+			    val_min > UINT32_MAX || val_max > UINT32_MAX) {
+				DPRINTF(sc, "%s: %s is not a valid number or range\n",
+				    hparams[i].name, value);
+				err = EINVAL;
+				goto out_locked;
+			}
+			hparams[i].value.min = (uint32_t)val_min;
+			hparams[i].value.max = (uint32_t)val_max;
+			hparams[i].changed = true;
 		}
+#endif
 	}
 
 	// Check magic headers
@@ -3449,6 +3774,40 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 		}
 	}
 
+	{
+		struct {
+			const char *name;
+			struct wg_u16_range *range;
+		} params[] = {
+			{ "content-padding-addition", &sc->sc_amnezia.am_content_padding_addition },
+			{ "rekey-after-time", &sc->sc_amnezia.am_rekey_after_time },
+			{ "rekey-timeout", &sc->sc_amnezia.am_rekey_timeout },
+			{ "reject-after-time", &sc->sc_amnezia.am_reject_after_time },
+			{ "keepalive-timeout", &sc->sc_amnezia.am_keepalive_timeout },
+			{ "max-handshake-attempts", &sc->sc_amnezia.am_max_handshake_attempts },
+		};
+
+		for (size_t i = 0; i < nitems(params); i++) {
+			if (nvlist_exists_number(nvl, params[i].name)) {
+				uint64_t packed = nvlist_get_number(nvl, params[i].name);
+				struct wg_u16_range range;
+				if (packed > UINT32_MAX) {
+					err = EINVAL;
+					goto out_locked;
+				}
+				range = wg_u16_range_unpack((uint32_t)packed);
+				if (range.min > range.max) {
+					err = EINVAL;
+					goto out_locked;
+				}
+				*params[i].range = range;
+			}
+		}
+	}
+	if (nvlist_exists_bool(nvl, "random-trailers"))
+		sc->sc_amnezia.am_random_trailers = nvlist_get_bool(nvl, "random-trailers");
+	if (nvlist_exists_bool(nvl, "disable-cookies"))
+		sc->sc_amnezia.am_disable_cookies = nvlist_get_bool(nvl, "disable-cookies");
 	if (nvlist_exists_binary(nvl, "private-key")) {
 		const void *key = nvlist_get_binary(nvl, "private-key", &size);
 		if (size != WG_KEY_SIZE) {
@@ -3509,6 +3868,7 @@ out_locked:
 	sx_xunlock(&sc->sc_lock);
 	nvlist_destroy(nvl);
 out:
+	explicit_bzero(header_protection_key, sizeof(header_protection_key));
 	zfree(nvlpacked, M_TEMP);
 	return (err);
 }
@@ -3532,6 +3892,7 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 		return (ENOMEM);
 
 	sx_slock(&sc->sc_lock);
+	nvlist_add_number(nvl, "awg-version", WG_AWG_VERSION_3);
 
 	if (sc->sc_socket.so_port != 0)
 		nvlist_add_number(nvl, "listen-port", sc->sc_socket.so_port);
@@ -3553,15 +3914,21 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 		wg_hdr_pair *hdr = &sc->sc_amnezia.am_h[i];
 		if (hdr->min) {
 			char name[3] = { 'h', '1' + i, '\0' };
-			char value[32];
-			size_t len;
+#ifdef AWG2_CLIENT_COMPAT
+			char value[2 * sizeof("4294967295") + sizeof("-")];
 
 			if (hdr->min == hdr->max)
-				len = snprintf(value, sizeof(value), "%u", hdr->min);
+				snprintf(value, sizeof(value), "%" PRIu32, hdr->min);
 			else
-				len = snprintf(value, sizeof(value), "%u-%u", hdr->min, hdr->max);
-
-			nvlist_add_binary(nvl, name, value, len + 1); // +1 for the null terminator
+				snprintf(value, sizeof(value), "%" PRIu32 "-%" PRIu32,
+				    hdr->min, hdr->max);
+			/* Old FreeBSD tools only understand the binary-string form.
+			 * New tools accept both this and the packed numeric set format. */
+			nvlist_add_binary(nvl, name, value, strlen(value) + 1);
+#else
+			nvlist_add_number(nvl, name,
+			    (uint64_t)hdr->max << 32 | hdr->min);
+#endif
 		}
 	}
 
@@ -3569,10 +3936,34 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 		char name[3] = { 'i', '1' + i, '\0' };
 		const char *value = sc->sc_amnezia.am_i[i];
 		if (value && *value) {
-			const char *value = sc->sc_amnezia.am_i[i];
 			nvlist_add_binary(nvl, name, value, strlen(value) + 1);
 		}
 	}
+	if (sc->sc_amnezia.am_has_header_protection_key)
+		nvlist_add_binary(nvl, "header-protection-key",
+			sc->sc_amnezia.am_header_protection_key, WG_KEY_SIZE);
+	{
+		struct {
+			const char *name;
+			struct wg_u16_range value;
+		} params[] = {
+			{ "content-padding-addition", sc->sc_amnezia.am_content_padding_addition },
+			{ "rekey-after-time", sc->sc_amnezia.am_rekey_after_time },
+			{ "rekey-timeout", sc->sc_amnezia.am_rekey_timeout },
+			{ "reject-after-time", sc->sc_amnezia.am_reject_after_time },
+			{ "keepalive-timeout", sc->sc_amnezia.am_keepalive_timeout },
+			{ "max-handshake-attempts", sc->sc_amnezia.am_max_handshake_attempts },
+		};
+
+		for (size_t i = 0; i < nitems(params); i++)
+			if (params[i].value.min || params[i].value.max)
+				nvlist_add_number(nvl, params[i].name,
+				    wg_u16_range_pack(params[i].value));
+	}
+	if (sc->sc_amnezia.am_random_trailers)
+		nvlist_add_bool(nvl, "random-trailers", true);
+	if (sc->sc_amnezia.am_disable_cookies)
+		nvlist_add_bool(nvl, "disable-cookies", true);
 
 	if (sc->sc_socket.so_user_cookie != 0)
 		nvlist_add_number(nvl, "user-cookie", sc->sc_socket.so_user_cookie);
@@ -3607,7 +3998,18 @@ wgc_get(struct wg_softc *sc, struct wg_data_io *wgd)
 				nvlist_add_binary(nvl_peer, "endpoint", &peer->p_endpoint.e_remote, sizeof(struct sockaddr_in6));
 			wg_timers_get_last_handshake(peer, &ts64);
 			nvlist_add_binary(nvl_peer, "last-handshake-time", &ts64, sizeof(ts64));
-			nvlist_add_number(nvl_peer, "persistent-keepalive-interval", peer->p_persistent_keepalive_interval);
+				{
+					struct wg_u16_range keepalive = wg_u16_range_unpack(
+					    atomic_load_32(&peer->p_persistent_keepalive_range));
+					nvlist_add_number(nvl_peer,
+					    "persistent-keepalive-interval",
+#ifdef AWG2_CLIENT_COMPAT
+					    keepalive.min == keepalive.max ? keepalive.min :
+					    wg_u16_range_pack(keepalive));
+#else
+					    wg_u16_range_pack(keepalive));
+#endif
+				}
 			nvlist_add_number(nvl_peer, "rx-bytes", counter_u64_fetch(peer->p_rx_bytes));
 			nvlist_add_number(nvl_peer, "tx-bytes", counter_u64_fetch(peer->p_tx_bytes));
 
@@ -4114,6 +4516,7 @@ static bool wg_run_selftests(void)
 	ret &= wg_allowedips_selftest();
 	ret &= noise_counter_selftest();
 	ret &= cookie_selftest();
+	ret &= awg_chacha20_selftest();
 	return ret;
 }
 #else

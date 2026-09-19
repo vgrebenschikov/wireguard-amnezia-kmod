@@ -65,7 +65,14 @@ awg_configuration_body()
 
 		# reset
 		atf_check -s exit:0 -o ignore			awg set $wg $p 0
-		atf_check -s exit:0 -o match:"0"		awg show $wg $p
+		reset_val=0
+		case "$p" in
+		h1) reset_val=1 ;;
+		h2) reset_val=2 ;;
+		h3) reset_val=3 ;;
+		h4) reset_val=4 ;;
+		esac
+		atf_check -s exit:0 -o match:"$reset_val"	awg show $wg $p
 		atf_check -s exit:0 -o not-match:"$p: "	awg show $wg
 		echo
 	done

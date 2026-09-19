@@ -16,6 +16,7 @@
 #define NOISE_HASH_LEN		BLAKE2S_HASH_SIZE
 
 #define REJECT_AFTER_TIME	180
+#define REKEY_AFTER_TIME	120
 #define REKEY_TIMEOUT		5
 #define KEEPALIVE_TIMEOUT	10
 
@@ -61,7 +62,7 @@ void	noise_remote_set_psk(struct noise_remote *,
 int	noise_remote_keys(struct noise_remote *,
 	    uint8_t[NOISE_PUBLIC_KEY_LEN],
 	    uint8_t[NOISE_SYMMETRIC_KEY_LEN]);
-int	noise_remote_initiation_expired(struct noise_remote *);
+int	noise_remote_initiation_expired(struct noise_remote *, uint16_t);
 void	noise_remote_handshake_clear(struct noise_remote *);
 void	noise_remote_keypairs_clear(struct noise_remote *);
 
@@ -69,7 +70,7 @@ void	noise_remote_keypairs_clear(struct noise_remote *);
 struct noise_keypair *
 	noise_keypair_lookup(struct noise_local *, uint32_t);
 struct noise_keypair *
-	noise_keypair_current(struct noise_remote *);
+	noise_keypair_current(struct noise_remote *, uint16_t);
 struct noise_keypair *
 	noise_keypair_ref(struct noise_keypair *);
 int	noise_keypair_received_with(struct noise_keypair *);
@@ -81,8 +82,8 @@ struct noise_remote *
 int	noise_keypair_nonce_next(struct noise_keypair *, uint64_t *);
 int	noise_keypair_nonce_check(struct noise_keypair *, uint64_t);
 
-int	noise_keep_key_fresh_send(struct noise_remote *);
-int	noise_keep_key_fresh_recv(struct noise_remote *);
+int	noise_keep_key_fresh_send(struct noise_remote *, uint16_t);
+int	noise_keep_key_fresh_recv(struct noise_remote *, uint16_t);
 int	noise_keypair_encrypt(
 	    struct noise_keypair *,
 	    uint32_t *r_idx,
@@ -91,7 +92,8 @@ int	noise_keypair_encrypt(
 int	noise_keypair_decrypt(
 	    struct noise_keypair *,
 	    uint64_t nonce,
-	    struct mbuf *);
+	    struct mbuf *,
+	    uint16_t);
 
 /* Handshake functions */
 int	noise_create_initiation(
@@ -99,7 +101,8 @@ int	noise_create_initiation(
 	    uint32_t *s_idx,
 	    uint8_t ue[NOISE_PUBLIC_KEY_LEN],
 	    uint8_t es[NOISE_PUBLIC_KEY_LEN + NOISE_AUTHTAG_LEN],
-	    uint8_t ets[NOISE_TIMESTAMP_LEN + NOISE_AUTHTAG_LEN]);
+	    uint8_t ets[NOISE_TIMESTAMP_LEN + NOISE_AUTHTAG_LEN],
+	    uint16_t rekey_timeout);
 
 int	noise_consume_initiation(
 	    struct noise_local *,
