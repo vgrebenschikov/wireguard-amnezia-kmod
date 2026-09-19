@@ -26,8 +26,8 @@ check_h_overlap()
 	return 0
 }
 
-# Actual confiruration parameters for AWG (AWG2)
-awg_config() {
+# Configuration parameters supported by AWG2.
+awg2_config() {
 	for i in 1 2 3 4; do
 		jc=$(jot -r 1 3 10)
 		jmin=$(jot -r 1 0 1200)
@@ -60,6 +60,39 @@ awg_config() {
 
 	echo $cfg
 	echo "AWG:" $cfg 1>&2
+}
+
+# Full AWG3 configuration used by all non-compatibility tests.
+# Test programs are exclusive, so a shared key file is safe and also makes
+# the same configuration usable from both vnet jails.
+AWG3_HEADER_KEY_FILE=/tmp/awg3-header-protection.key
+
+awg3_config() {
+	umask 077
+	awg genkey > "$AWG3_HEADER_KEY_FILE" || return 1
+
+	cfg="$(awg2_config)
+		header-protection-key $AWG3_HEADER_KEY_FILE
+		content-padding-addition 8-64
+		rekey-after-time 110-120
+		rekey-timeout 5-7
+		reject-after-time 180-190
+		keepalive-timeout 10-12
+		max-handshake-attempts 18-20
+		random-trailers on
+		disable-cookies on"
+
+	echo $cfg
+	echo "AWG3:" $cfg 1>&2
+}
+
+# AWG3 is the default for the kernel-to-kernel test suite.
+awg_config() {
+	awg3_config
+}
+
+awg_test_cleanup() {
+	rm -f "$AWG3_HEADER_KEY_FILE"
 }
 
 awg_config_get() {

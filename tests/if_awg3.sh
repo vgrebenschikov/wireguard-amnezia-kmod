@@ -31,7 +31,7 @@
 . "$(atf_get_srcdir)/vnet.subr"
 . "$(atf_get_srcdir)/awg.subr"
 
-awg_bin=amnezia-go-v2
+awg_bin=amneziawg-go
 
 atf_test_case "amnezia_kmod2go" "cleanup"
 amnezia_kmod2go_head()
@@ -50,7 +50,7 @@ amnezia_kmod2go_body()
 	endpoint1=192.168.2.1
 	endpoint2=192.168.2.2
 
-	awg_cfg=$(awg2_config)
+	awg_cfg=$(awg3_config)
 
 	setup_vnet_jails $endpoint1 $endpoint2
 	setup_debug
@@ -70,7 +70,8 @@ amnezia_kmod2go_body()
 	jexec wgtest2 pkill -9 $awg_bin || true
 	sleep 1
 
-	jexec wgtest2 $awg_bin --foreground $wg2 & awgpid=$!
+	jexec wgtest2 env WG_PROCESS_FOREGROUND=1 \
+		$awg_bin --foreground $wg2 & awgpid=$!
 	sleep 3
 
 	atf_check -s exit:0 -o ignore \
@@ -96,8 +97,9 @@ amnezia_kmod2go_body()
 	atf_check -s exit:0 \
 		jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up debug
 
-	# Generous timeout since the handshake takes some time.
-	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 -t 5 $tunnel2
+	# v3.1.20260828 can lose the first transport packet when S4 is set.
+	# Multiple probes still require the fully configured AWG3 tunnel to pass.
+	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 3 -t 8 $tunnel2
 	atf_check -s exit:0 -o ignore jexec wgtest2 ping -c 1 $tunnel1
 
 	atf_check -s exit:0 kill -TERM $awgpid
@@ -107,6 +109,7 @@ amnezia_kmod2go_body()
 amnezia_kmod2go_cleanup()
 {
 	vnet_cleanup
+	awg_test_cleanup
 }
 
 atf_test_case "amnezia_go2kmod" "cleanup"
@@ -126,7 +129,7 @@ amnezia_go2kmod_body()
 	endpoint1=192.168.2.1
 	endpoint2=192.168.2.2
 
-	awg_cfg=$(awg2_config)
+	awg_cfg=$(awg3_config)
 
 	setup_vnet_jails $endpoint1 $endpoint2
 	setup_debug
@@ -146,7 +149,8 @@ amnezia_go2kmod_body()
 	jexec wgtest2 pkill -9 $awg_bin || true
 	sleep 1
 
-	jexec wgtest2 $awg_bin --foreground $wg2 & awgpid=$!
+	jexec wgtest2 env WG_PROCESS_FOREGROUND=1 \
+		$awg_bin --foreground $wg2 & awgpid=$!
 	sleep 3
 
 	atf_check -s exit:0 -o ignore \
@@ -172,8 +176,9 @@ amnezia_go2kmod_body()
 	atf_check -s exit:0 \
 		jexec wgtest2 ifconfig $wg2 inet ${tunnel2}/24 up debug
 
-	# Generous timeout since the handshake takes some time.
-	atf_check -s exit:0 -o ignore jexec wgtest2 ping -c 1 -t 5 $tunnel1
+	# v3.1.20260828 can lose the first transport packet when S4 is set.
+	# Multiple probes still require the fully configured AWG3 tunnel to pass.
+	atf_check -s exit:0 -o ignore jexec wgtest2 ping -c 3 -t 8 $tunnel1
 	atf_check -s exit:0 -o ignore jexec wgtest1 ping -c 1 $tunnel2
 
 	atf_check -s exit:0 kill -TERM $awgpid
@@ -183,6 +188,7 @@ amnezia_go2kmod_body()
 amnezia_go2kmod_cleanup()
 {
 	vnet_cleanup
+	awg_test_cleanup
 }
 
 atf_init_test_cases()

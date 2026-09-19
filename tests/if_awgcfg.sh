@@ -113,6 +113,7 @@ awg_configuration_cleanup()
 	for i in $(ifconfig -g wg); do
 		ifconfig $i destroy
 	done
+	awg_test_cleanup
 }
 
 atf_test_case "awg_constraints" "cleanup"
@@ -253,6 +254,85 @@ awg_constraints_cleanup()
 	done
 }
 
+atf_test_case "awg3_parameters" "cleanup"
+awg3_parameters_head()
+{
+	atf_set descr 'Configure, query, reset, and validate AWG3 parameters'
+	atf_set require.user root
+}
+
+awg3_parameters_body()
+{
+	local wg peer_pri peer_pub key key_file zero_key_file
+
+	kldload -n if_wg || atf_skip "This test requires if_wg and could not load it"
+
+	wg=$(ifconfig wg create debug)
+	key_file=/tmp/awg3-parameter-test.key
+	zero_key_file=/tmp/awg3-parameter-test-zero.key
+	umask 077
+	awg genkey > "$key_file"
+	echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= > "$zero_key_file"
+	key=$(cat "$key_file")
+
+	# Header protection consumes a 12-byte nonce from every junk prefix.
+	atf_check -s exit:0 -o ignore awg set $wg s1 11 s2 12 s3 12 s4 12
+	atf_check -s exit:1 -o ignore -e match:'Invalid argument' \
+		awg set $wg header-protection-key "$key_file"
+	atf_check -s exit:0 -o ignore awg set $wg s1 12 s2 12 s3 12 s4 12
+	atf_check -s exit:0 -o ignore awg set $wg header-protection-key "$key_file"
+	actual=$(awg show $wg header-protection-key)
+	[ "$actual" = "$key" ] || atf_fail "header-protection-key roundtrip failed"
+	atf_check -s exit:0 -o ignore awg set $wg header-protection-key "$zero_key_file"
+	atf_check -s exit:0 -o match:'^AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=$' \
+		awg show $wg header-protection-key
+
+	set -- \
+		content-padding-addition 8-64 \
+		rekey-after-time 110-120 \
+		rekey-timeout 5-7 \
+		reject-after-time 180-190 \
+		keepalive-timeout 10-12 \
+		max-handshake-attempts 18-20
+	while [ $# -ne 0 ]; do
+		param=$1
+		value=$2
+		shift 2
+		atf_check -s exit:0 -o ignore awg set $wg "$param" "$value"
+		atf_check -s exit:0 -o match:"^${value}$" awg show $wg "$param"
+		atf_check -s exit:0 -o ignore awg set $wg "$param" 0
+		atf_check -s exit:0 -o match:'^0$' awg show $wg "$param"
+	done
+
+	for param in random-trailers disable-cookies; do
+		atf_check -s exit:0 -o ignore awg set $wg "$param" on
+		atf_check -s exit:0 -o match:'^on$' awg show $wg "$param"
+		atf_check -s exit:0 -o ignore awg set $wg "$param" off
+		atf_check -s exit:0 -o match:'^off$' awg show $wg "$param"
+	done
+
+	# Reject malformed or out-of-range u16 ranges in userspace.
+	for value in 20-10 1-65536 invalid; do
+		atf_check -s exit:1 -o ignore -e ignore \
+			awg set $wg rekey-timeout "$value"
+	done
+
+	# Persistent keepalive is also an AWG3 u16 range, but is peer-scoped.
+	peer_pri=$(wg genkey)
+	peer_pub=$(echo "$peer_pri" | wg pubkey)
+	atf_check -s exit:0 -o ignore awg set $wg peer "$peer_pub" \
+		persistent-keepalive 20-25
+	atf_check -s exit:0 -o match:'20-25$' awg show $wg persistent-keepalive
+}
+
+awg3_parameters_cleanup()
+{
+	for i in $(ifconfig -g wg); do
+		ifconfig $i destroy
+	done
+	rm -f /tmp/awg3-parameter-test.key /tmp/awg3-parameter-test-zero.key
+}
+
 atf_test_case "wide_range_parameters" "cleanup"
 wide_range_parameters_head()
 {
@@ -321,6 +401,7 @@ wide_range_parameters_body()
 wide_range_parameters_cleanup()
 {
 	vnet_cleanup
+	awg_test_cleanup
 }
 
 atf_test_case "mtu" "cleanup"
@@ -354,7 +435,8 @@ mtu_body()
 
 	setup_debug
 
-	awg_cfg=$(awg_config | sed -E 's/ s4 [0-9]+//')
+	# This test sets S4 below the minimum required by AWG3 header protection.
+	awg_cfg=$(awg2_config | sed -E 's/ s4 [0-9]+//')
 
 	jexec wgtest1 ifconfig ${epair}a ${endpoint1}/24 up
 	jexec wgtest2 ifconfig ${epair}b ${endpoint2}/24 up
@@ -431,12 +513,14 @@ mtu_body()
 mtu_cleanup()
 {
 	vnet_cleanup
+	awg_test_cleanup
 }
 
 atf_init_test_cases()
 {
 	atf_add_test_case "awg_configuration"
 	atf_add_test_case "awg_constraints"
+	atf_add_test_case "awg3_parameters"
 	atf_add_test_case "wide_range_parameters"
 	atf_add_test_case "mtu"
 }

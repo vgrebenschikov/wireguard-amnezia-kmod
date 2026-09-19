@@ -146,7 +146,7 @@ amnezia_go2kmod_body()
 	jexec wgtest2 pkill -9 $awg_bin || true
 	sleep 1
 
-	jexec wgtest2 amnezia-go --foreground $wg2 & awgpid=$!
+	jexec wgtest2 $awg_bin --foreground $wg2 & awgpid=$!
 	sleep 3
 
 	atf_check -s exit:0 -o ignore \

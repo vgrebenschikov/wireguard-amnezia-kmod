@@ -56,7 +56,15 @@ awg_config() {
 
 	cfg="jc $jc jmin $jmin jmax $jmax
 		s1 $s1 s2 $s2 s3 $s3 s4 $s4
-		h1 $h1 h2 $h2 h3 $h3 h4 $h4"
+		h1 $h1 h2 $h2 h3 $h3 h4 $h4
+		content-padding-addition 8-64
+		rekey-after-time 110-120
+		rekey-timeout 5-7
+		reject-after-time 180-190
+		keepalive-timeout 10-12
+		max-handshake-attempts 18-20
+		random-trailers on
+		disable-cookies on"
 
 	echo $cfg
 }
@@ -68,6 +76,9 @@ awg_config_get() {
 }
 
 c=$(awg_config)
+key_file=/tmp/awg3-header-protection.key
+awg genkey > "$key_file"
+c="$c header-protection-key $key_file"
 
 echo "awg set wg0 $c"
 echo
@@ -84,4 +95,13 @@ H1 = $(awg_config_get h1 $c)
 H2 = $(awg_config_get h2 $c)
 H3 = $(awg_config_get h3 $c)
 H4 = $(awg_config_get h4 $c)
+HeaderProtectionKey = $(cat "$key_file")
+ContentPaddingAddition = $(awg_config_get content-padding-addition $c)
+RekeyAfterTime = $(awg_config_get rekey-after-time $c)
+RekeyTimeout = $(awg_config_get rekey-timeout $c)
+RejectAfterTime = $(awg_config_get reject-after-time $c)
+KeepaliveTimeout = $(awg_config_get keepalive-timeout $c)
+MaxHandshakeAttempts = $(awg_config_get max-handshake-attempts $c)
+RandomTrailers = $(awg_config_get random-trailers $c)
+DisableCookies = $(awg_config_get disable-cookies $c)
 EOF

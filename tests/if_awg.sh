@@ -92,6 +92,7 @@ wg_basic_body()
 wg_basic_cleanup()
 {
 	vnet_cleanup
+	awg_test_cleanup
 }
 
 atf_test_case "wg_basic_crossaf" "cleanup"
@@ -175,6 +176,7 @@ wg_basic_crossaf_body()
 wg_basic_crossaf_cleanup()
 {
 	vnet_cleanup
+	awg_test_cleanup
 }
 
 atf_test_case "wg_basic_netmap" "cleanup"
@@ -272,6 +274,7 @@ wg_basic_netmap_body()
 wg_basic_netmap_cleanup()
 {
 	vnet_cleanup
+	awg_test_cleanup
 }
 
 # The kernel is expected to silently ignore any attempt to add a peer with a
@@ -316,6 +319,7 @@ wg_key_peerdev_shared_body()
 wg_key_peerdev_shared_cleanup()
 {
 	vnet_cleanup
+	awg_test_cleanup
 }
 
 # When a wg(8) interface has a private key reassigned that corresponds to the
@@ -372,6 +376,7 @@ wg_key_peerdev_makeshared_body()
 wg_key_peerdev_makeshared_cleanup()
 {
 	vnet_cleanup
+	awg_test_cleanup
 }
 
 # The kernel is expected to create the wg socket in the jail context that the
@@ -449,6 +454,7 @@ wg_vnet_parent_routing_body()
 wg_vnet_parent_routing_cleanup()
 {
 	vnet_cleanup
+	awg_test_cleanup
 }
 
 # The kernel should now allow removing a single allowed-ip without having to
@@ -534,6 +540,7 @@ wg_allowedip_incremental_body()
 wg_allowedip_incremental_cleanup()
 {
 	vnet_cleanup
+	awg_test_cleanup
 }
 
 atf_test_case "wg_allowedip_incremental_inet6" "cleanup"
@@ -591,6 +598,7 @@ wg_allowedip_incremental_inet6_body()
 wg_allowedip_incremental_inet6_cleanup()
 {
 	vnet_cleanup
+	awg_test_cleanup
 }
 
 
@@ -663,6 +671,7 @@ wg_allowedip_incremental_stealing_body()
 wg_allowedip_incremental_stealing_cleanup()
 {
 	vnet_cleanup
+	awg_test_cleanup
 }
 
 atf_test_case "awg_long_wait" "cleanup"
@@ -688,7 +697,9 @@ awg_long_wait_body()
 	setup_vnet_jails $endpoint1 $endpoint2
 	setup_debug
 
-	awg_cfg=$(awg_config)
+	# This test checks legacy idle-handshake timing, so keep default/AWG2
+	# timers instead of the deliberately shortened AWG3 ranges.
+	awg_cfg=$(awg2_config)
 
 	wg1=$(jexec wgtest1 ifconfig wg create debug name wg1)
 	atf_check -s exit:0 -o ignore -x "echo $pri1 |" \
@@ -750,6 +761,7 @@ awg_long_wait_body()
 awg_long_wait_cleanup()
 {
 	vnet_cleanup
+	awg_test_cleanup
 }
 
 atf_init_test_cases()
