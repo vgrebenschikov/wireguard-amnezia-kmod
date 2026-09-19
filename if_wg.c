@@ -2124,6 +2124,7 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	struct wg_peer		*peer, *allowed_peer;
 	struct noise_remote	*remote;
 	struct mbuf		*m;
+	uint8_t			 first_byte = 0;
 	int			 len;
 	enum wg_ring_state	 state = WG_PACKET_DEAD;
 
@@ -2144,8 +2145,10 @@ wg_decrypt(struct wg_softc *sc, struct wg_packet *pkt)
 	if (atomic_load_32(&peer->p_udp_window) < udp_window)
 		atomic_store_32(&peer->p_udp_window, udp_window);
 
-	/* A packet with length 0 is a keepalive packet */
-	if (__predict_false(m->m_pkthdr.len == 0)) {
+	/* AWG3 may append zero padding to an otherwise empty keepalive. */
+	if (m->m_pkthdr.len != 0)
+		m_copydata(m, 0, sizeof(first_byte), (caddr_t)&first_byte);
+	if (__predict_false(m->m_pkthdr.len == 0 || first_byte == 0)) {
 		DPRINTF(sc, "Receiving keepalive packet from peer "
 			"%" PRIu64 "\n", peer->p_id);
 		state = WG_PACKET_CRYPTED;
