@@ -3,6 +3,7 @@ PACKAGE=	tests
 ATF_TESTS_SH+=	if_wg
 ATF_TESTS_SH+=	if_awg
 ATF_TESTS_SH+=	if_awgcfg
+ATF_TESTS_SH+=	if_awg_padding
 ATF_TESTS_SH+=	if_awg1
 ATF_TESTS_SH+=	if_awg2
 ATF_TESTS_SH+=	if_awg3
