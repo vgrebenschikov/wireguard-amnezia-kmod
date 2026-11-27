@@ -200,6 +200,14 @@ awg_constraints_body()
 
 	# h1/h2/h3/h4
 
+	atf_check awg set "$wg" h1 1 h2 2 h3 3 h4 4
+	for type in 1 2 3 4; do
+		atf_check -o match:"^$type$" awg show "$wg" "h$type"
+	done
+	atf_check -s exit:1 -e match:"Invalid argument" awg set "$wg" h1 2
+	atf_check -s exit:1 -e match:"Invalid argument" awg set "$wg" h1 1-5
+	atf_check awg set "$wg" h1 0 h2 0 h3 0 h4 0
+
 	h=$(jot -r 1 5 4294967295)
 	atf_check -s exit:1 -o ignore -e match:"Invalid argument" \
 		awg set $wg h1 $h h2 $h

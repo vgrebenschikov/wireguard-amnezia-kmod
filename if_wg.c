@@ -3703,17 +3703,14 @@ wgc_set(struct wg_softc *sc, struct wg_data_io *wgd)
 			continue;
 		}
 
-		// Magic headers should be greater than WG_PKT_DATA, unless default
-		// WireGuard types are explicitly specified (e.g. Amnezia Premium)
-		if (hparams[i].value.min <= WG_PKT_DEFAULT_MAX) {
-			if (hparams[i].value.min == 1 + i && hparams[i].value.max == 1 + i) {
-				/* Explicit default WireGuard header type (1..4) */
-			} else {
-				DPRINTF(sc, "Magic Header should be above %u: %s=%u\n",
-						WG_PKT_DEFAULT_MAX, hparams[i].name, hparams[i].value.min);
-				err = EINVAL;
-				goto out_locked;
-			}
+		/* Only the matching default may use a reserved message type. */
+		if (hparams[i].value.min <= WG_PKT_DEFAULT_MAX &&
+		    (hparams[i].value.min != i + 1 || hparams[i].value.max != i + 1)) {
+			DPRINTF(sc, "Reserved Magic Header %s=%u-%u: expected %u or values above %u\n",
+			    hparams[i].name, hparams[i].value.min, hparams[i].value.max,
+			    i + 1, WG_PKT_DEFAULT_MAX);
+			err = EINVAL;
+			goto out_locked;
 		}
 
 		// Magic header range should be min <= max
