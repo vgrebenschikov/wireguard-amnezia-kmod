@@ -2023,13 +2023,14 @@ wg_transport_padding(struct wg_peer *peer, struct wg_packet *pkt,
 	struct wg_softc *sc = peer->p_sc;
 	struct wg_u16_range addition = sc->sc_amnezia.am_content_padding_addition;
 	uint32_t window = atomic_load_32(&peer->p_udp_window);
-	unsigned int space;
+	unsigned int padding, space;
 
 	if (addition.min != 0 || addition.max != 0) {
 		if (window < packet_size)
 			return (0);
 		space = window - packet_size;
-		return (MIN((unsigned int)wg_u16_range_pick(addition, 0), space));
+		padding = wg_u16_range_pick(addition, 0);
+		return (MIN(padding, space));
 	}
 	if (sc->sc_amnezia.am_random_trailers) {
 		if (window <= packet_size)
